@@ -32,6 +32,7 @@ def recover_interrupted_external_batches(db: Session) -> int:
             batch.batch_uuid,
             status='failed',
             failure_reason='service_restarted',
+            failure_category='transient',
             completed_at=datetime.utcnow(),
         )
         recovered += 1

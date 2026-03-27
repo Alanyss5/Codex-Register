@@ -259,6 +259,49 @@ X-API-Key: 你的APIKey
 
 这个值不是通过接口获取的，而是由系统管理员在本项目配置里设置后，直接发给对接方。
 
+---
+
+## 11. `failure_category` 字段
+
+批次响应现在会额外返回：
+
+```json
+"failure_category": null
+```
+
+或：
+
+```json
+"failure_category": "config"
+```
+
+允许值只有四种：
+
+- `config`
+- `business`
+- `transient`
+- `null`
+
+推荐按下面方式消费：
+
+- `transient`：可按你的策略做退避重试
+- `config`：不要自动重试，先人工检查配置
+- `business`：不要自动重试，先人工检查业务约束
+- `null`：当前批次还没有失败分类，通常表示批次未失败
+
+说明：
+
+- `failure_reason` 继续保留，主要给人看
+- `failure_category` 主要给程序判断
+- `POST /api/external/registration/batches/{batch_uuid}/cancel` 的响应也可能带上该字段；这是为了和其他批次响应保持一致，不需要时可直接忽略
+
+### 返回规则
+
+- `pending` / `running` / `completed` / `completed_partial` / `cancelled`
+  - `failure_category = null`
+- `failed`
+  - `failure_category` 一定是 `config | business | transient` 之一
+
 也就是说：
 
 - 对接方自己拿不到

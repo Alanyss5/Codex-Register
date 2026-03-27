@@ -183,6 +183,7 @@ class ExternalRegistrationBatch(Base):
     status = Column(String(32), default='pending', nullable=False)
     cancel_requested = Column(Boolean, default=False, nullable=False)
     failure_reason = Column(String(255))
+    failure_category = Column(String(20))
     email_service_type = Column(String(50), nullable=False)
     upload_enabled = Column(Boolean, default=False, nullable=False)
     upload_provider = Column(String(50))

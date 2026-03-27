@@ -18,6 +18,19 @@ from ..service_selection import UploadTarget, build_email_item_assignments, reso
 
 
 TERMINAL_ITEM_STATUSES = {'completed', 'failed', 'cancelled'}
+CONFIG_FAILURE_PREFIXES = (
+    'unsupported upload provider:',
+    'no enabled upload services for provider ',
+    'no enabled email services for type ',
+)
+BUSINESS_FAILURE_REASONS = {
+    'outlook requested_service_id cannot be reused when count > 1',
+}
+TRANSIENT_FAILURE_REASONS = {
+    'service_restarted',
+    'no_available_email_service',
+    'registration_failed',
+}
 
 
 class ExternalBatchCreateRequest(BaseModel):
@@ -36,6 +49,12 @@ class ExternalBatchCreateRequest(BaseModel):
 
 class ExternalBatchService:
     @staticmethod
+    def _mark_idempotent_replay(batch):
+        if batch is not None:
+            setattr(batch, '_idempotent_replay', True)
+        return batch
+
+    @staticmethod
     def _detach_batch(db: Session, batch):
         if batch is None:
             return None
@@ -47,7 +66,7 @@ class ExternalBatchService:
         if request.idempotency_key:
             existing = external_batch_crud.get_batch_by_idempotency_key(db, request.idempotency_key)
             if existing:
-                return self._detach_batch(db, existing)
+                return self._mark_idempotent_replay(self._detach_batch(db, existing))
 
         upload_target = None
         if request.upload_enabled:
@@ -110,10 +129,47 @@ class ExternalBatchService:
             if request.idempotency_key:
                 existing = external_batch_crud.get_batch_by_idempotency_key(db, request.idempotency_key)
                 if existing:
-                    return self._detach_batch(db, existing)
+                    return self._mark_idempotent_replay(self._detach_batch(db, existing))
             raise
 
         return self._detach_batch(db, external_batch_crud.get_batch_by_uuid(db, batch_uuid))
+
+    @staticmethod
+    def _classify_failure_category(failure_reason: Optional[str]) -> str:
+        reason = (failure_reason or '').strip().lower()
+        if not reason:
+            return 'transient'
+        if reason in BUSINESS_FAILURE_REASONS:
+            return 'business'
+        if reason in TRANSIENT_FAILURE_REASONS:
+            return 'transient'
+        if reason.startswith(CONFIG_FAILURE_PREFIXES):
+            return 'config'
+        if reason.startswith('upload service ') and (
+            ' not found' in reason
+            or ' is disabled' in reason
+            or ' does not belong to provider ' in reason
+        ):
+            return 'config'
+        if reason.startswith('email service ') and (
+            ' not found' in reason
+            or ' is disabled' in reason
+            or ' does not belong to type ' in reason
+        ):
+            return 'config'
+        return 'transient'
+
+    @staticmethod
+    def _select_failure_reason(batch, items) -> Optional[str]:
+        if batch.failure_reason:
+            return batch.failure_reason
+        for item in items:
+            if item.failure_reason:
+                return item.failure_reason
+        for item in items:
+            if item.upload_status == 'failed' and item.upload_error:
+                return item.upload_error
+        return None
 
     def recompute_summary(self, db: Session, batch_uuid: str):
         batch = external_batch_crud.get_batch_by_uuid(db, batch_uuid)
@@ -154,6 +210,10 @@ class ExternalBatchService:
             status = 'failed'
             completed_at = datetime.utcnow()
 
+        failure_category = None
+        if status == 'failed':
+            failure_category = self._classify_failure_category(self._select_failure_reason(batch, items))
+
         updated = external_batch_crud.update_batch(
             db,
             batch_uuid,
@@ -165,6 +225,21 @@ class ExternalBatchService:
             upload_failed_count=upload_failed_count,
             recent_errors=recent_errors[-20:],
             completed_at=completed_at,
+            failure_category=failure_category,
+        )
+        db.commit()
+        return self._detach_batch(db, updated)
+
+    def ensure_failure_category(self, db: Session, batch):
+        if batch is None:
+            return None
+        if batch.status != 'failed' or batch.failure_category:
+            return batch
+        items = external_batch_crud.list_batch_items(db, batch.batch_uuid)
+        updated = external_batch_crud.update_batch(
+            db,
+            batch.batch_uuid,
+            failure_category=self._classify_failure_category(self._select_failure_reason(batch, items)),
         )
         db.commit()
         return self._detach_batch(db, updated)
@@ -299,6 +374,7 @@ def _serialize_batch(batch) -> dict:
         'upload_success_count': batch.upload_success_count,
         'upload_failed_count': batch.upload_failed_count,
         'failure_reason': batch.failure_reason,
+        'failure_category': batch.failure_category,
         'created_at': batch.created_at.isoformat() if batch.created_at else None,
         'started_at': batch.started_at.isoformat() if batch.started_at else None,
         'completed_at': batch.completed_at.isoformat() if batch.completed_at else None,
@@ -330,27 +406,34 @@ def create_external_registration_batch(payload: dict, background_tasks=None) -> 
 
     request = _request_from_payload(payload)
     service = ExternalBatchService()
+    is_replay = False
     with get_db() as db:
         existing = external_batch_crud.get_batch_by_idempotency_key(db, request.idempotency_key) if request.idempotency_key else None
         if existing is not None:
+            existing = service.ensure_failure_category(db, existing)
             response = _serialize_batch(existing)
             response['idempotent_replay'] = True
             return response
         batch = service.create_batch(db, request)
+        is_replay = bool(getattr(batch, '_idempotent_replay', False))
+        if is_replay:
+            batch = service.ensure_failure_category(db, batch)
     if background_tasks is not None:
         background_tasks.add_task(service.run_batch, batch.batch_uuid)
     response = _serialize_batch(batch)
-    response['idempotent_replay'] = False
+    response['idempotent_replay'] = is_replay
     return response
 
 
 def get_external_registration_batch_status(batch_uuid: str) -> dict:
     from ...database.session import get_db
 
+    service = ExternalBatchService()
     with get_db() as db:
         batch = external_batch_crud.get_batch_by_uuid(db, batch_uuid)
         if batch is None:
             raise ValueError('batch_not_found')
+        batch = service.ensure_failure_category(db, batch)
         return _serialize_batch(batch)
 
 

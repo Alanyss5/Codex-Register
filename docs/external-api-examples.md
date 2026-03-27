@@ -272,6 +272,91 @@ print(resp.json())
 
 ---
 
+## 附：`failure_category` 示例
+
+`failure_category` 是给程序消费的稳定字段，允许值只有：
+
+- `config`
+- `business`
+- `transient`
+- `null`
+
+### 示例 1：未失败批次
+
+```json
+{
+  "batch_uuid": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "status": "pending",
+  "requested_count": 3,
+  "completed_count": 0,
+  "success_count": 0,
+  "failed_count": 0,
+  "upload_success_count": 0,
+  "upload_failed_count": 0,
+  "failure_reason": null,
+  "failure_category": null,
+  "recent_errors": [],
+  "idempotent_replay": false
+}
+```
+
+### 示例 2：可重试失败
+
+```json
+{
+  "batch_uuid": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "status": "failed",
+  "requested_count": 3,
+  "completed_count": 1,
+  "success_count": 0,
+  "failed_count": 1,
+  "upload_success_count": 0,
+  "upload_failed_count": 0,
+  "failure_reason": "upstream timeout",
+  "failure_category": "transient",
+  "recent_errors": [
+    "provider timeout"
+  ],
+  "idempotent_replay": false
+}
+```
+
+### 示例 3：配置问题失败
+
+```json
+{
+  "batch_uuid": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "status": "failed",
+  "requested_count": 3,
+  "completed_count": 0,
+  "success_count": 0,
+  "failed_count": 0,
+  "upload_success_count": 0,
+  "upload_failed_count": 0,
+  "failure_reason": "upload service not configured",
+  "failure_category": "config",
+  "recent_errors": [
+    "upload provider sub2api has no configured service"
+  ],
+  "idempotent_replay": false
+}
+```
+
+### 示例 4：cancel 响应
+
+`POST /api/external/registration/batches/{batch_uuid}/cancel` 也可能返回 `failure_category`，只是为了和其他批次响应保持一致：
+
+```json
+{
+  "batch_uuid": "0f8fad5b-d9cb-469f-a165-70867728950e",
+  "status": "cancelled",
+  "failure_reason": null,
+  "failure_category": null
+}
+```
+
+---
+
 ## 4. 查询批次状态
 
 ### curl
