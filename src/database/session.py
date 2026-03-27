@@ -49,7 +49,7 @@ class DatabaseSessionManager:
             echo=False,  # 设置为 True 可以查看所有 SQL 语句
             pool_pre_ping=True  # 连接池预检查
         )
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, expire_on_commit=False, bind=self.engine)
 
     def get_db(self) -> Generator[Session, None, None]:
         """

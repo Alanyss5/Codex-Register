@@ -5,6 +5,7 @@
 from .models import Base, Account, EmailService, RegistrationTask, Setting
 from .session import get_db, init_database, get_session_manager, DatabaseSessionManager
 from . import crud
+from . import external_batch_crud
 
 __all__ = [
     'Base',
@@ -17,4 +18,5 @@ __all__ = [
     'get_session_manager',
     'DatabaseSessionManager',
     'crud',
+    'external_batch_crud',
 ]

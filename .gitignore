@@ -56,3 +56,43 @@ Thumbs.db
 # Project specific
 backups/
 /out/
+
+# Local diagnostics / migration artifacts
+*.log
+analysis_output.txt
+broken_server_logs.txt
+docker_logs_latest.txt
+latest_*.txt
+logs_*.txt
+logs_198/
+src_23.tar.gz
+src_23/
+src_23_extracted/
+*.recovered
+/.tmp_*.py
+
+# Local one-off scripts
+/check_sync.py
+/clear_and_deploy.py
+/clear_logs_198.py
+/deploy.py
+/deploy2.log
+/deploy_198.py
+/deploy_probe.py
+/download_local.py
+/fetch_198_logs.py
+/fetch_logs.py
+/fetch_logs_198.py
+/login.html
+/probe_auth_flow.py
+/pull_logs.py
+/register_198.py
+/remote_check.py
+/restore_src.py
+/rollback.py
+/run_probe_198.py
+/step1_download_good.py
+/step2_upload_to_broken.py
+/sync_23.py
+/test_openai_js.py
+/test_proxy_chatgpt*.py

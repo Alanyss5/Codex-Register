@@ -555,10 +555,14 @@ function connectWebSocket(taskUuid) {
                 updateTaskStatus(data.status);
 
                 // 检查是否完成
-                if (['completed', 'failed', 'cancelled', 'cancelling'].includes(data.status)) {
+                if (isTerminalTaskStatus(data.status)) {
                     // 保存最终状态，用于 onclose 判断
                     taskFinalStatus = data.status;
                     taskCompleted = true;
+                    if (currentTask) {
+                        currentTask.status = data.status;
+                    }
+                    stopLogPolling();
 
                     // 断开 WebSocket（异步操作）
                     disconnectWebSocket();
@@ -575,10 +579,12 @@ function connectWebSocket(taskUuid) {
                             // 刷新账号列表
                             loadRecentAccounts();
                         } else if (data.status === 'failed') {
-                            addLog('error', '[错误] 注册失败');
-                            toast.error('注册失败');
+                            const errorDetail = data.error || data.message || '';
+                            addLog('error', errorDetail ? `[错误] 注册失败: ${errorDetail}` : '[错误] 注册失败');
+                            toast.error(errorDetail ? `注册失败: ${errorDetail}` : '注册失败');
                         } else if (data.status === 'cancelled' || data.status === 'cancelling') {
-                            addLog('warning', '[警告] 任务已取消');
+                            const cancelMsg = data.message || '[警告] 任务已取消';
+                            addLog('warning', cancelMsg);
                         }
                     }
                 }
@@ -606,9 +612,12 @@ function connectWebSocket(taskUuid) {
         webSocket.onerror = (error) => {
             console.error('WebSocket 错误:', error);
             // 切换到轮询
-            useWebSocket = false;
             stopWebSocketHeartbeat();
-            startLogPolling(taskUuid);
+            const shouldPoll = !taskCompleted && taskFinalStatus === null;
+            if (shouldPoll) {
+                useWebSocket = false;
+                startLogPolling(taskUuid);
+            }
         };
 
     } catch (error) {
@@ -754,9 +763,12 @@ async function handleCancelTask() {
 
 // 开始轮询日志
 function startLogPolling(taskUuid) {
-    let lastLogIndex = 0;
+    if (logPollingInterval) {
+        return;
+    }
 
-    logPollingInterval = setInterval(async () => {
+    let lastLogIndex = 0;
+    const pollOnce = async () => {
         try {
             const data = await api.get(`/registration/tasks/${taskUuid}/logs`);
 
@@ -781,7 +793,12 @@ function startLogPolling(taskUuid) {
             lastLogIndex = logs.length;
 
             // 检查任务是否完成
-            if (['completed', 'failed', 'cancelled'].includes(data.status)) {
+            if (isTerminalTaskStatus(data.status)) {
+                taskFinalStatus = data.status;
+                taskCompleted = true;
+                if (currentTask) {
+                    currentTask.status = data.status;
+                }
                 stopLogPolling();
                 resetButtons();
 
@@ -794,17 +811,22 @@ function startLogPolling(taskUuid) {
                         // 刷新账号列表
                         loadRecentAccounts();
                     } else if (data.status === 'failed') {
-                        addLog('error', '[错误] 注册失败');
-                        toast.error('注册失败');
-                    } else if (data.status === 'cancelled') {
-                        addLog('warning', '[警告] 任务已取消');
+                        const errorDetail = data.error || data.message || '';
+                        addLog('error', errorDetail ? `[错误] 注册失败: ${errorDetail}` : '[错误] 注册失败');
+                        toast.error(errorDetail ? `注册失败: ${errorDetail}` : '注册失败');
+                    } else if (data.status === 'cancelled' || data.status === 'cancelling') {
+                        const cancelMsg = data.message || '[警告] 任务已取消';
+                        addLog('warning', cancelMsg);
                     }
                 }
             }
         } catch (error) {
             console.error('轮询日志失败:', error);
         }
-    }, 1000);
+    };
+
+    logPollingInterval = setInterval(pollOnce, 1000);
+    pollOnce();
 }
 
 // 停止轮询日志
@@ -871,13 +893,18 @@ function updateTaskStatus(status) {
         running: { text: '运行中', class: 'running' },
         completed: { text: '已完成', class: 'completed' },
         failed: { text: '失败', class: 'failed' },
-        cancelled: { text: '已取消', class: 'disabled' }
+        cancelled: { text: '已取消', class: 'disabled' },
+        cancelling: { text: '取消中', class: 'disabled' }
     };
 
     const info = statusInfo[status] || { text: status, class: '' };
     elements.taskStatusBadge.textContent = info.text;
     elements.taskStatusBadge.className = `status-badge ${info.class}`;
     elements.taskStatus.textContent = info.text;
+}
+
+function isTerminalTaskStatus(status) {
+    return ['completed', 'failed', 'cancelled', 'cancelling'].includes(status);
 }
 
 // 显示批量状态

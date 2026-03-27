@@ -4,7 +4,7 @@
 
 import logging
 import re
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from ...config.constants import (
     OTP_CODE_SIMPLE_PATTERN,
@@ -123,13 +123,21 @@ class EmailParser:
             return match.group(1)
         return None
 
+    def email_delivery_key(self, email: EmailMessage) -> Tuple[int, str, str]:
+        """Build a stable key for a specific delivered email."""
+        return (
+            int(email.received_timestamp or 0),
+            (email.sender or "").strip().lower(),
+            (email.subject or "").strip().lower(),
+        )
+
     def find_verification_code_in_emails(
         self,
         emails: List[EmailMessage],
         target_email: Optional[str] = None,
         min_timestamp: int = 0,
-        used_codes: Optional[set] = None,
-    ) -> Optional[str]:
+        used_email_keys: Optional[set] = None,
+    ) -> Optional[Tuple[str, Tuple[int, str, str]]]:
         """
         从邮件列表中查找验证码
 
@@ -137,12 +145,12 @@ class EmailParser:
             emails: 邮件列表
             target_email: 目标邮箱地址
             min_timestamp: 最小时间戳（用于过滤旧邮件）
-            used_codes: 已使用的验证码集合（用于去重）
+            used_email_keys: 已处理过的邮件投递集合（用于去重）
 
         Returns:
-            验证码字符串，如果未找到返回 None
+            (验证码, 邮件投递键)，如果未找到返回 None
         """
-        used_codes = used_codes or set()
+        used_email_keys = used_email_keys or set()
 
         for email in emails:
             # 时间戳过滤
@@ -158,16 +166,16 @@ class EmailParser:
             # 提取验证码
             code = self.extract_verification_code(email)
             if code:
-                # 去重检查
-                if code in used_codes:
-                    logger.debug(f"跳过已使用的验证码: {code}")
+                delivery_key = self.email_delivery_key(email)
+                if delivery_key in used_email_keys:
+                    logger.debug(f"跳过已处理的邮件投递: {delivery_key}")
                     continue
 
                 logger.info(
                     f"[{target_email or 'unknown'}] 找到验证码: {code}, "
                     f"邮件主题: {email.subject[:30]}"
                 )
-                return code
+                return code, delivery_key
 
         return None
 

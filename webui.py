@@ -5,6 +5,17 @@ Web UI 启动入口
 import uvicorn
 import logging
 import sys
+import asyncio
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    # Monkeypatch uvicorn to prevent it from resetting the policy to Proactor
+    try:
+        import uvicorn.loops.asyncio
+        uvicorn.loops.asyncio.setup = lambda: None
+    except ImportError:
+        pass
 from pathlib import Path
 
 # 添加项目根目录到 Python 路径
@@ -95,10 +106,11 @@ def start_webui():
         "app": "src.web.app:app",
         "host": settings.webui_host,
         "port": settings.webui_port,
-        "reload": settings.debug,
+        "reload": False,
         "log_level": "info" if settings.debug else "warning",
         "access_log": settings.debug,
         "ws": "websockets",
+        "loop": "asyncio",
     }
 
     logger = logging.getLogger(__name__)

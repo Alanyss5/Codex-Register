@@ -62,6 +62,20 @@ class TempmailService(BaseEmailService):
         self._email_cache: Dict[str, Dict[str, Any]] = {}
         self._last_check_time: float = 0
 
+    @staticmethod
+    def _get_domain_blacklist() -> set:
+        """从数据库读取被拉黑的邮箱域名列表"""
+        try:
+            from ..database import crud
+            from ..database.session import get_db
+            with get_db() as db:
+                setting = crud.get_setting(db, "email.domain_blacklist")
+                if setting and setting.value:
+                    return set(json.loads(setting.value))
+        except Exception:
+            pass
+        return set()
+
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         创建新的临时邮箱
@@ -76,47 +90,65 @@ class TempmailService(BaseEmailService):
             - token: 邮箱 token（同 service_id）
             - created_at: 创建时间戳
         """
-        try:
-            # 发送创建请求
-            response = self.http_client.post(
-                f"{self.config['base_url']}/inbox/create",
-                headers={
-                    "Accept": "application/json",
-                    "Content-Type": "application/json",
-                },
-                json={}
-            )
+        blacklist = self._get_domain_blacklist()
+        max_blacklist_retries = 5
 
-            if response.status_code not in (200, 201):
-                self.update_status(False, EmailServiceError(f"请求失败，状态码: {response.status_code}"))
-                raise EmailServiceError(f"Tempmail.lol 请求失败，状态码: {response.status_code}")
+        for attempt in range(1, max_blacklist_retries + 1):
+            try:
+                # 发送创建请求
+                response = self.http_client.post(
+                    f"{self.config['base_url']}/inbox/create",
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/json",
+                    },
+                    json={}
+                )
 
-            data = response.json()
-            email = str(data.get("address", "")).strip()
-            token = str(data.get("token", "")).strip()
+                if response.status_code not in (200, 201):
+                    self.update_status(False, EmailServiceError(f"请求失败，状态码: {response.status_code}"))
+                    raise EmailServiceError(f"Tempmail.lol 请求失败，状态码: {response.status_code}")
 
-            if not email or not token:
-                self.update_status(False, EmailServiceError("返回数据不完整"))
-                raise EmailServiceError("Tempmail.lol 返回数据不完整")
+                data = response.json()
+                email = str(data.get("address", "")).strip()
+                token = str(data.get("token", "")).strip()
 
-            # 缓存邮箱信息
-            email_info = {
-                "email": email,
-                "service_id": token,
-                "token": token,
-                "created_at": time.time(),
-            }
-            self._email_cache[email] = email_info
+                if not email or not token:
+                    self.update_status(False, EmailServiceError("返回数据不完整"))
+                    raise EmailServiceError("Tempmail.lol 返回数据不完整")
 
-            logger.info(f"Tempmail.lol 邮箱创建成功，新鲜热乎: {email}")
-            self.update_status(True)
-            return email_info
+                # 检查域名黑名单
+                domain = email.rsplit("@", 1)[-1].lower() if "@" in email else ""
+                if blacklist and domain in blacklist:
+                    logger.warning(
+                        f"域名 {domain} 在黑名单中，重新申请邮箱 ({attempt}/{max_blacklist_retries})"
+                    )
+                    continue
 
-        except Exception as e:
-            self.update_status(False, e)
-            if isinstance(e, EmailServiceError):
+                # 缓存邮箱信息
+                email_info = {
+                    "email": email,
+                    "service_id": token,
+                    "token": token,
+                    "created_at": time.time(),
+                }
+                self._email_cache[email] = email_info
+
+                logger.info(f"Tempmail.lol 邮箱创建成功，新鲜热乎: {email}")
+                self.update_status(True)
+                return email_info
+
+            except EmailServiceError:
                 raise
-            raise EmailServiceError(f"创建 Tempmail.lol 邮箱失败: {e}")
+            except Exception as e:
+                self.update_status(False, e)
+                raise EmailServiceError(f"创建 Tempmail.lol 邮箱失败: {e}")
+
+        # 所有重试都命中黑名单
+        self.update_status(False, EmailServiceError("连续命中黑名单域名"))
+        raise EmailServiceError(
+            f"Tempmail.lol 连续 {max_blacklist_retries} 次都命中黑名单域名，无法创建邮箱"
+        )
 
     def get_verification_code(
         self,

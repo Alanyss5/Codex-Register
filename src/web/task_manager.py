@@ -195,8 +195,50 @@ class TaskManager:
         if task_uuid not in _task_status:
             _task_status[task_uuid] = {}
 
+        normalized_kwargs = dict(kwargs)
+        updated_at = datetime.utcnow().isoformat()
+
+        # 终态补全关键字段，便于前端和 WebSocket 消费。
+        if status == "failed":
+            error = normalized_kwargs.get("error")
+            if isinstance(error, Exception):
+                error = str(error)
+            if not error:
+                error = "Task failed"
+            normalized_kwargs["error"] = str(error)
+            normalized_kwargs.setdefault("message", "Task execution failed")
+        elif status == "completed":
+            normalized_kwargs.setdefault("message", "Task completed")
+        elif status == "cancelled":
+            normalized_kwargs.setdefault("message", "Task cancelled")
+        elif status == "cancelling":
+            normalized_kwargs.setdefault("message", "Task cancellation requested")
+
         _task_status[task_uuid]["status"] = status
-        _task_status[task_uuid].update(kwargs)
+        _task_status[task_uuid]["updated_at"] = updated_at
+        _task_status[task_uuid].update(normalized_kwargs)
+
+        # 若事件循环可用，自动推送单任务状态到 WebSocket。
+        if self._loop and self._loop.is_running():
+            try:
+                try:
+                    running_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    running_loop = None
+
+                if running_loop is self._loop:
+                    payload = {k: v for k, v in _task_status[task_uuid].items() if k != "status"}
+                    asyncio.create_task(
+                        self.broadcast_status(task_uuid, status, **payload)
+                    )
+                else:
+                    payload = {k: v for k, v in _task_status[task_uuid].items() if k != "status"}
+                    asyncio.run_coroutine_threadsafe(
+                        self.broadcast_status(task_uuid, status, **payload),
+                        self._loop
+                    )
+            except Exception as e:
+                logger.warning(f"广播任务状态失败: {e}")
 
     def get_status(self, task_uuid: str) -> Optional[dict]:
         """获取任务状态"""

@@ -1,0 +1,1 @@
+"""Web dependencies package."""

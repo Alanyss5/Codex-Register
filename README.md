@@ -47,6 +47,14 @@
 - 支持打包为 Windows/Linux/macOS 可执行文件
 - 更适配当前 OpenAI 注册与登录链路
 
+## 文档
+
+- [Temp Mail 域名池与外部注册 API 说明](docs/temp-mail-external-api.md)
+- [External API 调用示例](docs/external-api-examples.md)
+- [External API 第三方对接速览](docs/external-api-quickstart.md)
+- [第三方技术对接文档](docs/third-party-integration-guide.md)
+- [External API 网站内管理与 API Key 生成方案](docs/external-api-webui-management-plan.md)
+
 ## 环境要求
 
 - Python 3.10+

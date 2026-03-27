@@ -141,8 +141,10 @@ class OutlookService(BaseEmailService):
         # IMAP 连接限制（防止限流）
         self._imap_semaphore = threading.Semaphore(5)
 
-        # 验证码去重机制
-        self._used_codes: Dict[str, set] = {}
+        # 邮件投递去重机制：避免重复消费同一封邮件，但允许新邮件复用相同验证码
+        self._used_email_deliveries: Dict[tuple, set] = {}
+        self._verification_stage_by_email: Dict[str, str] = {}
+        self._last_verification_debug: Dict[str, Dict[str, Any]] = {}
 
     def _get_provider(
         self,
@@ -291,6 +293,86 @@ class OutlookService(BaseEmailService):
         self.update_status(True)
         return email_info
 
+    def set_verification_stage(self, email: str, stage: str) -> None:
+        """Track the current OTP stage for each Outlook mailbox.
+
+        When switching stages (e.g. signup_otp → relogin_otp), carry over
+        already-consumed email deliveries so the new stage won't re-consume
+        OTP emails that were already used in the previous stage.
+        """
+        email_lower = email.lower()
+        old_stage = self._verification_stage_by_email.get(email_lower)
+        self._verification_stage_by_email[email_lower] = stage
+
+        # 跨阶段继承已消费的邮件投递记录
+        if old_stage and old_stage != stage:
+            old_key = (email_lower, old_stage)
+            new_key = (email_lower, stage)
+            old_used = self._used_email_deliveries.get(old_key, set())
+            if old_used:
+                if new_key not in self._used_email_deliveries:
+                    self._used_email_deliveries[new_key] = set()
+                self._used_email_deliveries[new_key].update(old_used)
+                logger.info(
+                    f"[{email}] 阶段切换 {old_stage} → {stage}，"
+                    f"继承 {len(old_used)} 条已消费邮件记录"
+                )
+
+    def _is_preferred_openai_otp_sender(self, email: EmailMessage) -> bool:
+        sender = (email.sender or "").lower()
+        return "otp@" in sender and ".openai.com" in sender
+
+    def _build_candidate_summary(
+        self,
+        email: EmailMessage,
+        *,
+        target_email: str,
+        otp_sent_at: Optional[float],
+    ) -> Dict[str, Any]:
+        is_openai = self.email_parser.is_openai_verification_email(email, target_email=target_email)
+        code = self.email_parser.extract_verification_code(email) if is_openai else None
+        received_ts = int(email.received_timestamp or 0)
+        otp_ts = int(otp_sent_at or 0)
+        return {
+            "sender": email.sender,
+            "subject": email.subject,
+            "received_timestamp": received_ts,
+            "delta_from_otp_sent": received_ts - otp_ts if otp_ts else None,
+            "is_openai_verification": is_openai,
+            "is_preferred_sender": self._is_preferred_openai_otp_sender(email),
+            "code": code,
+        }
+
+    def _format_candidate_summary(self, summary: Dict[str, Any]) -> str:
+        sender = str(summary.get("sender") or "-")
+        received_ts = summary.get("received_timestamp")
+        delta = summary.get("delta_from_otp_sent")
+        code = str(summary.get("code") or "-")
+        preferred = "preferred" if summary.get("is_preferred_sender") else "generic"
+        return (
+            f"sender={sender}, ts={received_ts}, delta={delta}, "
+            f"code={code}, kind={preferred}"
+        )
+
+    def get_last_verification_debug(self, email: str) -> Dict[str, Any]:
+        return dict(self._last_verification_debug.get(email.lower(), {}))
+
+    @staticmethod
+    def _is_email_within_otp_window(email: EmailMessage, min_timestamp: int) -> bool:
+        received_timestamp = int(getattr(email, "received_timestamp", 0) or 0)
+        return not (
+            min_timestamp > 0
+            and received_timestamp > 0
+            and received_timestamp < min_timestamp
+        )
+
+    def _is_email_delivery_unused(
+        self,
+        email: EmailMessage,
+        used_email_deliveries: set,
+    ) -> bool:
+        return self.email_parser.email_delivery_key(email) not in used_email_deliveries
+
     def get_verification_code(
         self,
         email: str,
@@ -333,10 +415,32 @@ class OutlookService(BaseEmailService):
             f"提供者优先级: {[p.value for p in self.provider_priority]}"
         )
 
-        # 初始化验证码去重集合
-        if email not in self._used_codes:
-            self._used_codes[email] = set()
-        used_codes = self._used_codes[email]
+        # 初始化邮件投递去重集合
+        stage = self._verification_stage_by_email.get(email.lower(), "signup_otp")
+        logger.info(f"[{email}] verification stage: {stage}")
+        used_delivery_key = (email.lower(), stage)
+        if used_delivery_key not in self._used_email_deliveries:
+            self._used_email_deliveries[used_delivery_key] = set()
+        used_email_deliveries = self._used_email_deliveries[used_delivery_key]
+        debug_state = {
+            "stage": stage,
+            "poll_count": 0,
+            "otp_sent_at": int(otp_sent_at or 0),
+            "min_timestamp": int((otp_sent_at - 60) if otp_sent_at else 0),
+            "deferred_generic_only_polls": 0,
+            "fresh_verification_count": 0,
+            "fresh_preferred_sender_count": 0,
+            "stale_preferred_sender_count": 0,
+            "available_fresh_verification_count": 0,
+            "available_fresh_preferred_sender_count": 0,
+            "used_fresh_preferred_sender_count": 0,
+            "selected_sender": None,
+            "selected_code": None,
+            "selected_received_timestamp": None,
+            "candidate_summaries": [],
+            "last_status": "waiting",
+        }
+        self._last_verification_debug[email.lower()] = debug_state
 
         # 计算最小时间戳（留出 60 秒时钟偏差）
         min_timestamp = (otp_sent_at - 60) if otp_sent_at else 0
@@ -346,6 +450,7 @@ class OutlookService(BaseEmailService):
 
         while time.time() - start_time < actual_timeout:
             poll_count += 1
+            debug_state["poll_count"] = poll_count
 
             # 渐进式邮件检查：前 3 次只检查未读
             only_unseen = poll_count <= 3
@@ -362,17 +467,136 @@ class OutlookService(BaseEmailService):
                     logger.debug(
                         f"[{email}] 第 {poll_count} 次轮询获取到 {len(emails)} 封邮件"
                     )
+                    candidate_summaries = [
+                        self._build_candidate_summary(
+                            item,
+                            target_email=email,
+                            otp_sent_at=otp_sent_at,
+                        )
+                        for item in emails[:5]
+                    ]
+                    debug_state["candidate_summaries"] = candidate_summaries
+                    if candidate_summaries:
+                        logger.info(
+                            f"[{email}] OTP candidates poll={poll_count}: "
+                            + " | ".join(
+                                self._format_candidate_summary(item)
+                                for item in candidate_summaries
+                            )
+                        )
+
+                    candidate_emails = emails
+                    if stage == "relogin_otp":
+                        verification_emails = [
+                            item
+                            for item in emails
+                            if self.email_parser.is_openai_verification_email(
+                                item,
+                                target_email=email,
+                            )
+                        ]
+                        fresh_verification_emails = [
+                            item
+                            for item in verification_emails
+                            if self._is_email_within_otp_window(item, min_timestamp)
+                        ]
+                        preferred_sender_emails = [
+                            item
+                            for item in verification_emails
+                            if self._is_preferred_openai_otp_sender(item)
+                        ]
+                        fresh_preferred_sender_emails = [
+                            item
+                            for item in preferred_sender_emails
+                            if self._is_email_within_otp_window(item, min_timestamp)
+                        ]
+                        available_fresh_verification_emails = [
+                            item
+                            for item in fresh_verification_emails
+                            if self._is_email_delivery_unused(item, used_email_deliveries)
+                        ]
+                        available_fresh_preferred_sender_emails = [
+                            item
+                            for item in fresh_preferred_sender_emails
+                            if self._is_email_delivery_unused(item, used_email_deliveries)
+                        ]
+                        stale_preferred_sender_count = (
+                            len(preferred_sender_emails) - len(fresh_preferred_sender_emails)
+                        )
+                        used_fresh_preferred_sender_count = (
+                            len(fresh_preferred_sender_emails) - len(available_fresh_preferred_sender_emails)
+                        )
+                        debug_state["fresh_verification_count"] = len(fresh_verification_emails)
+                        debug_state["fresh_preferred_sender_count"] = len(fresh_preferred_sender_emails)
+                        debug_state["stale_preferred_sender_count"] = stale_preferred_sender_count
+                        debug_state["available_fresh_verification_count"] = len(available_fresh_verification_emails)
+                        debug_state["available_fresh_preferred_sender_count"] = len(available_fresh_preferred_sender_emails)
+                        debug_state["used_fresh_preferred_sender_count"] = used_fresh_preferred_sender_count
+
+                        if available_fresh_preferred_sender_emails:
+                            candidate_emails = available_fresh_preferred_sender_emails
+                            logger.info(
+                                f"[{email}] relogin_otp 命中首选 OTP 发件人，优先使用 "
+                                f"{len(available_fresh_preferred_sender_emails)} 封当前窗口内且未消费的 otp@*.openai.com 邮件"
+                            )
+                        elif available_fresh_verification_emails and poll_count < 3:
+                            debug_state["deferred_generic_only_polls"] += 1
+                            debug_state["last_status"] = "deferred_generic_only"
+                            if stale_preferred_sender_count:
+                                logger.info(
+                                    f"[{email}] relogin_otp 仅发现 {len(available_fresh_verification_emails)} 封当前窗口内通用验证码，"
+                                    f"同时过滤掉 {stale_preferred_sender_count} 封过旧 otp@*.openai.com 邮件，继续等待"
+                                )
+                            if used_fresh_preferred_sender_count:
+                                logger.info(
+                                    f"[{email}] relogin_otp 当前窗口内有 {used_fresh_preferred_sender_count} 封 preferred 邮件已消费，"
+                                    "本轮不再重复使用"
+                                )
+                            logger.info(
+                                f"[{email}] relogin_otp 暂缓消费通用验证码邮件，继续等待 otp@*.openai.com"
+                            )
+                            time.sleep(poll_interval)
+                            continue
+                        elif available_fresh_verification_emails:
+                            candidate_emails = available_fresh_verification_emails
+                            if stale_preferred_sender_count:
+                                logger.info(
+                                    f"[{email}] relogin_otp 当前窗口内没有可用的 otp@*.openai.com 邮件，"
+                                    f"改用 {len(available_fresh_verification_emails)} 封当前窗口内通用验证码，"
+                                    f"已过滤 {stale_preferred_sender_count} 封过旧 preferred 邮件"
+                                )
+                            if used_fresh_preferred_sender_count:
+                                logger.info(
+                                    f"[{email}] relogin_otp 当前窗口内的 preferred 邮件都已消费，"
+                                    f"改用 {len(available_fresh_verification_emails)} 封未消费验证码"
+                                )
+                        elif verification_emails:
+                            candidate_emails = verification_emails
 
                     # 从邮件中查找验证码
-                    code = self.email_parser.find_verification_code_in_emails(
-                        emails,
+                    match = self.email_parser.find_verification_code_in_emails(
+                        candidate_emails,
                         target_email=email,
                         min_timestamp=min_timestamp,
-                        used_codes=used_codes,
+                        used_email_keys=used_email_deliveries,
                     )
 
-                    if code:
-                        used_codes.add(code)
+                    if match:
+                        code, delivery_key = match
+                        used_email_deliveries.add(delivery_key)
+                        selected_email = next(
+                            (
+                                item
+                                for item in candidate_emails
+                                if self.email_parser.email_delivery_key(item) == delivery_key
+                            ),
+                            None,
+                        )
+                        if selected_email is not None:
+                            debug_state["selected_sender"] = selected_email.sender
+                            debug_state["selected_received_timestamp"] = int(selected_email.received_timestamp or 0)
+                        debug_state["selected_code"] = code
+                        debug_state["last_status"] = "selected"
                         elapsed = int(time.time() - start_time)
                         logger.info(
                             f"[{email}] 找到验证码: {code}，"
@@ -388,6 +612,7 @@ class OutlookService(BaseEmailService):
             time.sleep(poll_interval)
 
         elapsed = int(time.time() - start_time)
+        debug_state["last_status"] = "timeout"
         logger.warning(f"[{email}] 验证码超时 ({actual_timeout}s)，共轮询 {poll_count} 次")
         return None
 

@@ -8,6 +8,7 @@ import re
 import time
 import json
 import logging
+from datetime import datetime
 from email import message_from_string
 from email.header import decode_header, make_header
 from email.message import Message
@@ -18,9 +19,16 @@ from typing import Optional, Dict, Any, List
 from .base import BaseEmailService, EmailServiceError, EmailServiceType
 from ..core.http_client import HTTPClient, RequestConfig
 from ..config.constants import OTP_CODE_PATTERN
+from .temp_mail_addressing import generate_local_part, choose_domain
+from .temp_mail_domain_provider import resolve_temp_mail_domains, summarize_temp_mail_domains
 
 
 logger = logging.getLogger(__name__)
+
+SEMANTIC_OTP_PATTERNS = (
+    re.compile(r"(?:openai\s+verification\s+code\s+is|verification\s+code\s+is|code\s+is)\s*[:：]?\s*(\d{6})", re.I),
+    re.compile(r"(?:openai\s+verification\s+code|verification\s+code|验证码)\s*[:：]?\s*(\d{6})", re.I),
+)
 
 
 class TempMailService(BaseEmailService):
@@ -38,21 +46,22 @@ class TempMailService(BaseEmailService):
             config: 配置字典，支持以下键:
                 - base_url: Worker 域名地址，如 https://mail.example.com (必需)
                 - admin_password: Admin 密码，对应 x-admin-auth header (必需)
-                - domain: 邮箱域名，如 example.com (必需)
-                - enable_prefix: 是否启用前缀，默认 True
+                - domain: 邮箱域名，如 example.com（可选，作为 domains/worker 回退）
+                - domains: 可选域名池，数组或逗号分隔字符串（优先级最高）
+                - enable_prefix: 是否启用前缀，默认 False
                 - timeout: 请求超时时间，默认 30
                 - max_retries: 最大重试次数，默认 3
             name: 服务名称
         """
         super().__init__(EmailServiceType.TEMP_MAIL, name)
 
-        required_keys = ["base_url", "admin_password", "domain"]
+        required_keys = ["base_url", "admin_password"]
         missing_keys = [key for key in required_keys if not (config or {}).get(key)]
         if missing_keys:
             raise ValueError(f"缺少必需配置: {missing_keys}")
 
         default_config = {
-            "enable_prefix": True,
+            "enable_prefix": False,
             "timeout": 30,
             "max_retries": 3,
         }
@@ -67,6 +76,8 @@ class TempMailService(BaseEmailService):
 
         # 邮箱缓存：email -> {jwt, address}
         self._email_cache: Dict[str, Dict[str, Any]] = {}
+        self._verification_state: Dict[str, Dict[str, Any]] = {}
+        self._last_verification_debug: Dict[str, Dict[str, Any]] = {}
 
     def _decode_mime_header(self, value: str) -> str:
         """解码 MIME 头，兼容 RFC 2047 编码主题。"""
@@ -159,6 +170,102 @@ class TempMailService(BaseEmailService):
             "raw": raw,
         }
 
+    def _extract_body_from_raw_mail(self, raw: str) -> str:
+        """Extract a readable body from raw MIME content without searching header noise."""
+        if not raw:
+            return ""
+
+        try:
+            message = message_from_string(raw, policy=email_policy)
+            return self._extract_body_from_message(message)
+        except Exception as e:
+            logger.debug(f"解析 TempMail raw 正文失败: {e}")
+            return ""
+
+    @staticmethod
+    def _find_code_in_text(text: str, *, semantic_first: bool = True, pattern: str = OTP_CODE_PATTERN) -> Optional[str]:
+        normalized = unescape(re.sub(r"<[^>]+>", " ", str(text or ""))).strip()
+        if not normalized:
+            return None
+
+        if semantic_first:
+            for candidate_pattern in SEMANTIC_OTP_PATTERNS:
+                match = candidate_pattern.search(normalized)
+                if match:
+                    return match.group(1)
+
+        match = re.search(pattern, normalized)
+        return match.group(1) if match else None
+
+    def _extract_verification_code_from_mail(
+        self,
+        parsed_mail: Dict[str, str],
+        pattern: str = OTP_CODE_PATTERN,
+    ) -> Optional[str]:
+        """Prefer body-derived OTPs and avoid matching digits from headers/domain names."""
+        body_text = str(parsed_mail.get("body") or "").strip()
+        subject = str(parsed_mail.get("subject") or "").strip()
+        raw_text = str(parsed_mail.get("raw") or "").strip()
+        raw_body_text = self._extract_body_from_raw_mail(raw_text)
+
+        for text in (body_text, raw_body_text, subject):
+            code = self._find_code_in_text(text, semantic_first=True, pattern=pattern)
+            if code:
+                return code
+
+        for text in (body_text, raw_body_text):
+            code = self._find_code_in_text(text, semantic_first=False, pattern=pattern)
+            if code:
+                return code
+
+        return self._find_code_in_text(subject, semantic_first=False, pattern=pattern)
+
+    def _get_verification_state(self, email: str) -> Dict[str, Any]:
+        state = self._verification_state.setdefault(
+            email,
+            {
+                "stage": "signup_otp",
+                "consumed_mail_ids": set(),
+                "last_code": None,
+                "last_mail_id": None,
+                "last_mail_timestamp": None,
+                "last_stage": None,
+            },
+        )
+        consumed_mail_ids = state.get("consumed_mail_ids")
+        if not isinstance(consumed_mail_ids, set):
+            state["consumed_mail_ids"] = set(consumed_mail_ids or [])
+        return state
+
+    def set_verification_stage(self, email: str, stage: str) -> None:
+        state = self._get_verification_state(email)
+        state["stage"] = stage or "signup_otp"
+
+    @staticmethod
+    def _extract_mail_timestamp(mail: Dict[str, Any]) -> Optional[float]:
+        for key in ("createdAt", "created_at", "receivedAt", "received_at", "timestamp", "date"):
+            value = mail.get(key)
+            if value in (None, ""):
+                continue
+
+            if isinstance(value, (int, float)):
+                numeric = float(value)
+                return numeric / 1000 if numeric > 1_000_000_000_000 else numeric
+
+            if isinstance(value, str):
+                stripped = value.strip()
+                if not stripped:
+                    continue
+                if stripped.isdigit():
+                    numeric = float(stripped)
+                    return numeric / 1000 if numeric > 1_000_000_000_000 else numeric
+                try:
+                    return datetime.fromisoformat(stripped.replace("Z", "+00:00")).timestamp()
+                except ValueError:
+                    continue
+
+        return None
+
     def _admin_headers(self) -> Dict[str, str]:
         """构造 admin 请求头"""
         return {
@@ -166,6 +273,28 @@ class TempMailService(BaseEmailService):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+
+    @staticmethod
+    def _address_jwt_headers(jwt: str) -> Dict[str, str]:
+        return {
+            "Authorization": f"Bearer {jwt}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+
+    def _fetch_domains_from_worker(self) -> Dict[str, Any]:
+        """Fetch temp-mail domains from worker admin endpoint."""
+        return self._make_request("GET", "/admin/domains")
+
+    def get_domain_summary(self, preview_limit: int = 3) -> Dict[str, Any]:
+        """Return safe domain summary for API/capabilities output."""
+        summary = summarize_temp_mail_domains(
+            self.config,
+            fetch_domains=self._fetch_domains_from_worker,
+            preview_limit=preview_limit,
+        )
+        summary.pop("domains", None)
+        return summary
 
     def _make_request(self, method: str, path: str, **kwargs) -> Any:
         """
@@ -224,17 +353,15 @@ class TempMailService(BaseEmailService):
             - jwt: 用户级 JWT token
             - service_id: 同 email（用作标识）
         """
-        import random
-        import string
-
-        # 生成随机邮箱名
-        letters = ''.join(random.choices(string.ascii_lowercase, k=5))
-        digits = ''.join(random.choices(string.digits, k=random.randint(1, 3)))
-        suffix = ''.join(random.choices(string.ascii_lowercase, k=random.randint(1, 3)))
-        name = letters + digits + suffix
-
-        domain = self.config["domain"]
-        enable_prefix = self.config.get("enable_prefix", True)
+        enable_prefix = False  # 强制禁用前缀，忽略数据库配置
+        name = generate_local_part(enable_prefix=enable_prefix)
+        domains = resolve_temp_mail_domains(
+            self.config,
+            fetch_domains=self._fetch_domains_from_worker,
+        )
+        if not domains:
+            raise EmailServiceError("TempMail 未找到可用域名，请检查 domains/domain 或 /admin/domains")
+        domain = choose_domain(domains)
 
         body = {
             "enablePrefix": enable_prefix,
@@ -272,6 +399,62 @@ class TempMailService(BaseEmailService):
                 raise
             raise EmailServiceError(f"创建邮箱失败: {e}")
 
+    def _fetch_api_mails(self, jwt: str) -> Dict[str, Any]:
+        """Fetch mailbox contents through the worker address-scoped API."""
+        return self._make_request(
+            "GET",
+            "/api/mails",
+            params={"limit": 20, "offset": 0},
+            headers=self._address_jwt_headers(jwt),
+        )
+
+    def _fetch_admin_mails(self, email: str) -> Dict[str, Any]:
+        """Fetch mailbox contents through the worker admin API."""
+        return self._make_request(
+            "GET",
+            "/admin/mails",
+            params={"limit": 20, "offset": 0, "address": email},
+        )
+
+    def _fetch_mail_batch(
+        self,
+        email: str,
+        jwt: Optional[str],
+    ) -> tuple[List[Dict[str, Any]], str, Optional[str]]:
+        """Prefer address-scoped API mails, then fall back to admin mails."""
+        last_error: Optional[str] = None
+
+        if jwt:
+            try:
+                response = self._fetch_api_mails(jwt)
+                mails = response.get("results", response if isinstance(response, list) else [])
+                if isinstance(mails, list):
+                    return mails, "/api/mails", None
+                last_error = f"/api/mails returned unexpected payload: {response}"
+            except Exception as e:
+                last_error = str(e)
+                cached = {**self._email_cache.get(email, {}), "disable_user_api": True, "disable_api_mails": True}
+                self._email_cache[email] = cached
+                logger.warning(f"TempMail /api/mails 失败，切换到 admin 拉取邮件: {email} - {e}")
+
+        try:
+            response = self._fetch_admin_mails(email)
+            mails = response.get("results", response if isinstance(response, list) else [])
+            if isinstance(mails, list):
+                return mails, "/admin/mails", last_error
+            if last_error:
+                last_error = f"{last_error}; /admin/mails returned unexpected payload: {response}"
+            else:
+                last_error = f"/admin/mails returned unexpected payload: {response}"
+        except Exception as e:
+            admin_error = str(e)
+            if last_error:
+                last_error = f"{last_error}; {admin_error}"
+            else:
+                last_error = admin_error
+
+        return [], "unavailable", last_error
+
     def get_verification_code(
         self,
         email: str,
@@ -280,82 +463,168 @@ class TempMailService(BaseEmailService):
         pattern: str = OTP_CODE_PATTERN,
         otp_sent_at: Optional[float] = None,
     ) -> Optional[str]:
-        """
-        从 TempMail 邮箱获取验证码
-
-        Args:
-            email: 邮箱地址
-            email_id: 未使用，保留接口兼容
-            timeout: 超时时间（秒）
-            pattern: 验证码正则
-            otp_sent_at: OTP 发送时间戳（暂未使用）
-
-        Returns:
-            验证码字符串，超时返回 None
-        """
-        logger.info(f"正在从 TempMail 邮箱 {email} 获取验证码...")
+        """Fetch a verification code from TempMail."""
+        logger.info(f"??? TempMail ?? {email} ?????...")
 
         start_time = time.time()
         seen_mail_ids: set = set()
+        poll_count = 0
+        last_error: Optional[str] = None
+        verification_state = self._get_verification_state(email)
+        stage = str(verification_state.get("stage") or "signup_otp")
+        consumed_mail_ids = verification_state.setdefault("consumed_mail_ids", set())
+        last_code = verification_state.get("last_code")
+        last_stage = verification_state.get("last_stage")
+        min_timestamp = float(otp_sent_at or 0)
+        debug_state = {
+            "stage": stage,
+            "poll_count": 0,
+            "last_status": "waiting",
+            "otp_sent_at": otp_sent_at or 0,
+            "min_timestamp": min_timestamp,
+            "fresh_verification_count": 0,
+            "fresh_preferred_sender_count": 0,
+            "stale_preferred_sender_count": 0,
+            "available_fresh_verification_count": 0,
+            "available_fresh_preferred_sender_count": 0,
+            "used_fresh_preferred_sender_count": 0,
+            "selected_sender": None,
+            "selected_code": None,
+            "selected_received_timestamp": None,
+            "deferred_generic_only_polls": 0,
+            "candidate_summaries": [],
+        }
+        self._last_verification_debug[email.lower()] = debug_state
 
-        # 优先使用用户级 JWT，回退到 admin API
         cached = self._email_cache.get(email, {})
-        jwt = cached.get("jwt")
+        jwt = None if cached.get("disable_user_api") or cached.get("disable_api_mails") else cached.get("jwt")
 
         while time.time() - start_time < timeout:
+            poll_count += 1
+            debug_state["poll_count"] = poll_count
             try:
-                if jwt:
-                    response = self._make_request(
-                        "GET",
-                        "/user_api/mails",
-                        params={"limit": 20, "offset": 0},
-                        headers={"x-user-token": jwt, "Content-Type": "application/json", "Accept": "application/json"},
-                    )
-                else:
-                    response = self._make_request(
-                        "GET",
-                        "/admin/mails",
-                        params={"limit": 20, "offset": 0, "address": email},
-                    )
-
-                # /user_api/mails 和 /admin/mails 返回格式相同: {"results": [...], "total": N}
-                mails = response.get("results", [])
+                mails, source_path, request_error = self._fetch_mail_batch(email, jwt)
+                if request_error:
+                    last_error = request_error
                 if not isinstance(mails, list):
                     time.sleep(3)
                     continue
 
-                for mail in mails:
+                matched_candidates: List[Dict[str, Any]] = []
+                debug_candidates: List[Dict[str, Any]] = []
+
+                for index, mail in enumerate(mails):
                     mail_id = mail.get("id")
                     if not mail_id or mail_id in seen_mail_ids:
                         continue
 
                     seen_mail_ids.add(mail_id)
+                    if mail_id in consumed_mail_ids:
+                        continue
 
                     parsed = self._extract_mail_fields(mail)
                     sender = parsed["sender"].lower()
                     subject = parsed["subject"]
                     body_text = parsed["body"]
-                    raw_text = parsed["raw"]
-                    content = f"{sender}\n{subject}\n{body_text}\n{raw_text}".strip()
+                    content = f"{sender}\n{subject}\n{body_text}".strip()
 
-                    # 只处理 OpenAI 邮件
                     if "openai" not in sender and "openai" not in content.lower():
                         continue
 
-                    match = re.search(pattern, content)
-                    if match:
-                        code = match.group(1)
-                        logger.info(f"从 TempMail 邮箱 {email} 找到验证码: {code}")
-                        self.update_status(True)
-                        return code
+                    code = self._extract_verification_code_from_mail(parsed, pattern=pattern)
+                    if not code:
+                        continue
+
+                    mail_ts = self._extract_mail_timestamp(mail)
+                    is_fresh = otp_sent_at is None or (mail_ts is not None and mail_ts >= otp_sent_at)
+                    freshness_rank = 1 if otp_sent_at is None else 0
+                    if otp_sent_at is not None:
+                        if mail_ts is not None:
+                            if mail_ts < otp_sent_at:
+                                debug_state["stale_preferred_sender_count"] += 1
+                                continue
+                            freshness_rank = 2
+                            debug_state["available_fresh_verification_count"] += 1
+                            debug_state["available_fresh_preferred_sender_count"] += 1
+                            debug_state["fresh_preferred_sender_count"] += 1
+                        elif stage == "relogin_otp":
+                            debug_state["deferred_generic_only_polls"] += 1
+                            continue
+
+                    if stage == "relogin_otp" and code == last_code and last_stage == "signup_otp":
+                        continue
+
+                    debug_state["fresh_verification_count"] += int(is_fresh)
+                    debug_candidates.append(
+                        {
+                            "sender": parsed["sender"] or "-",
+                            "received_timestamp": mail_ts,
+                            "delta_from_otp_sent": None if otp_sent_at is None or mail_ts is None else round(mail_ts - otp_sent_at, 3),
+                            "code": code,
+                            "preferred": bool(is_fresh),
+                        }
+                    )
+                    matched_candidates.append(
+                        {
+                            "code": code,
+                            "mail_id": mail_id,
+                            "sender": parsed["sender"] or "-",
+                            "timestamp": mail_ts if mail_ts is not None else float("-inf"),
+                            "freshness_rank": freshness_rank,
+                            "index": index,
+                        }
+                    )
+
+                if debug_candidates:
+                    debug_state["candidate_summaries"] = debug_candidates[:5]
+
+                if matched_candidates:
+                    matched_candidates.sort(
+                        key=lambda item: (item["freshness_rank"], item["timestamp"], item["index"]),
+                        reverse=True,
+                    )
+                    selected = matched_candidates[0]
+                    code = selected["code"]
+                    selected_mail_id = selected["mail_id"]
+                    consumed_mail_ids.add(selected_mail_id)
+                    verification_state["last_code"] = code
+                    verification_state["last_mail_id"] = selected_mail_id
+                    verification_state["last_mail_timestamp"] = (
+                        None if selected["timestamp"] == float("-inf") else selected["timestamp"]
+                    )
+                    verification_state["last_stage"] = stage
+                    debug_state["last_status"] = "matched"
+                    debug_state["selected_sender"] = selected["sender"]
+                    debug_state["selected_code"] = code
+                    debug_state["selected_received_timestamp"] = (
+                        None if selected["timestamp"] == float("-inf") else selected["timestamp"]
+                    )
+                    if selected["freshness_rank"] >= 2:
+                        debug_state["used_fresh_preferred_sender_count"] = 1
+                    wait_duration = max(time.time() - start_time, 0.0)
+                    logger.info(
+                        f"TempMail verification code found for {email}: {code} "
+                        f"(source={source_path}, stage={stage}, polls={poll_count}, wait={wait_duration:.2f}s)"
+                    )
+                    self.update_status(True)
+                    return code
 
             except Exception as e:
-                logger.debug(f"检查 TempMail 邮件时出错: {e}")
+                last_error = str(e)
+                logger.debug(f"?? TempMail ?????: {e}")
 
             time.sleep(3)
 
-        logger.warning(f"等待 TempMail 验证码超时: {email}")
+        wait_duration = max(time.time() - start_time, 0.0)
+        debug_state["last_status"] = "timeout"
+        logger.warning(
+            f"?? TempMail ?????: {email}; polls={poll_count}; wait={wait_duration:.2f}s; "
+            f"last_error={last_error or '-'}"
+        )
         return None
+
+    def get_last_verification_debug(self, email: str) -> Dict[str, Any]:
+        return dict(self._last_verification_debug.get(email.lower(), {}))
 
     def list_emails(self, limit: int = 100, offset: int = 0, **kwargs) -> List[Dict[str, Any]]:
         """

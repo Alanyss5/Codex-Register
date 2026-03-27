@@ -172,6 +172,59 @@ class TeamManagerService(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+
+class ExternalRegistrationBatch(Base):
+    """Persistent external registration batch."""
+    __tablename__ = 'external_registration_batches'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_uuid = Column(String(36), unique=True, nullable=False, index=True)
+    idempotency_key = Column(String(255), unique=True, nullable=True, index=True)
+    status = Column(String(32), default='pending', nullable=False)
+    cancel_requested = Column(Boolean, default=False, nullable=False)
+    failure_reason = Column(String(255))
+    email_service_type = Column(String(50), nullable=False)
+    upload_enabled = Column(Boolean, default=False, nullable=False)
+    upload_provider = Column(String(50))
+    requested_count = Column(Integer, default=0, nullable=False)
+    completed_count = Column(Integer, default=0, nullable=False)
+    success_count = Column(Integer, default=0, nullable=False)
+    failed_count = Column(Integer, default=0, nullable=False)
+    upload_success_count = Column(Integer, default=0, nullable=False)
+    upload_failed_count = Column(Integer, default=0, nullable=False)
+    request_payload = Column(JSONEncodedDict)
+    runtime_snapshot = Column(JSONEncodedDict)
+    recent_errors = Column(JSONEncodedDict)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    items = relationship('ExternalRegistrationBatchItem', back_populates='batch', cascade='all, delete-orphan')
+
+
+class ExternalRegistrationBatchItem(Base):
+    """Per-item persistent state for an external registration batch."""
+    __tablename__ = 'external_registration_batch_items'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    batch_id = Column(Integer, ForeignKey('external_registration_batches.id'), nullable=False, index=True)
+    item_index = Column(Integer, nullable=False)
+    status = Column(String(32), default='pending', nullable=False)
+    failure_reason = Column(String(255))
+    registration_task_uuid = Column(String(36), index=True)
+    selected_email_service_id = Column(Integer, ForeignKey('email_services.id'), index=True)
+    upload_status = Column(String(32), default='not_enabled', nullable=False)
+    upload_error = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime)
+    completed_at = Column(DateTime)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    batch = relationship('ExternalRegistrationBatch', back_populates='items')
+    email_service = relationship('EmailService')
+
+
 class Proxy(Base):
     """代理列表表"""
     __tablename__ = 'proxies'

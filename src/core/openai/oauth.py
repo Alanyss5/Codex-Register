@@ -228,6 +228,46 @@ def generate_oauth_url(
     )
 
 
+def generate_oauth_url_no_prompt(
+    *,
+    redirect_uri: str = OAUTH_REDIRECT_URI,
+    scope: str = OAUTH_SCOPE,
+    client_id: str = OAUTH_CLIENT_ID,
+    login_hint: Optional[str] = None
+) -> OAuthStart:
+    """
+    生成 OAuth 授权 URL（不带 prompt=login）
+
+    用于 Outlook 重登后已持有 auth cookie 的场景，
+    让 OpenAI 直接复用当前登录态而不强制重新登录。
+    """
+    state = _random_state()
+    code_verifier = _pkce_verifier()
+    code_challenge = _sha256_b64url_no_pad(code_verifier)
+
+    params = {
+        "client_id": client_id,
+        "response_type": "code",
+        "redirect_uri": redirect_uri,
+        "scope": scope,
+        "state": state,
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256",
+        "id_token_add_organizations": "true",
+        "codex_cli_simplified_flow": "true",
+        "prompt": "none",
+    }
+    if login_hint:
+        params["login_hint"] = login_hint
+    auth_url = f"{OAUTH_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    return OAuthStart(
+        auth_url=auth_url,
+        state=state,
+        code_verifier=code_verifier,
+        redirect_uri=redirect_uri,
+    )
+
+
 def submit_callback_url(
     *,
     callback_url: str,

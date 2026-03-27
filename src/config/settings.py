@@ -94,6 +94,19 @@ SETTING_DEFINITIONS: Dict[str, SettingDefinition] = {
         description="Web UI 访问密码",
         is_secret=True
     ),
+    "external_api_enabled": SettingDefinition(
+        db_key="external_api.enabled",
+        default_value=False,
+        category=SettingCategory.GENERAL,
+        description="是否启用外部 API"
+    ),
+    "external_api_key": SettingDefinition(
+        db_key="external_api.key",
+        default_value="",
+        category=SettingCategory.GENERAL,
+        description="外部 API Key",
+        is_secret=True
+    ),
 
     # 日志配置
     "log_level": SettingDefinition(
@@ -391,6 +404,7 @@ DB_SETTING_KEYS = {name: defn.db_key for name, defn in SETTING_DEFINITIONS.items
 SETTING_TYPES: Dict[str, Type] = {
     "debug": bool,
     "webui_port": int,
+    "external_api_enabled": bool,
     "log_retention_days": int,
     "proxy_enabled": bool,
     "proxy_port": int,
@@ -612,6 +626,8 @@ class Settings(BaseModel):
     webui_port: int = 8000
     webui_secret_key: SecretStr = SecretStr("your-secret-key-change-in-production")
     webui_access_password: SecretStr = SecretStr("admin123")
+    external_api_enabled: bool = False
+    external_api_key: SecretStr = SecretStr("")
 
     # 日志配置
     log_level: str = "INFO"
