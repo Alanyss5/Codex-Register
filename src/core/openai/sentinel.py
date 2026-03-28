@@ -14,10 +14,20 @@ from typing import Sequence
 
 DEFAULT_SENTINEL_DIFF = "0fffff"
 DEFAULT_MAX_ITERATIONS = 500_000
-_SCREEN_SIGNATURES = (3000, 3120, 4000, 4160)
-_LANGUAGE_SIGNATURE = "en-US,es-US,en,es"
-_NAVIGATOR_KEYS = ("location", "ontransitionend", "onprogress")
-_WINDOW_KEYS = ("window", "document", "navigator")
+_SCREEN_SIGNATURES = ("1920x1080", "2560x1440", "1366x768", "1536x864", "1440x900")
+_LANGUAGE_SIGNATURE = "en-US,en"
+_NAVIGATOR_KEYS = (
+    "vendorSub", "productSub", "vendor", "maxTouchPoints",
+    "scheduling", "userActivation", "doNotTrack", "geolocation",
+    "connection", "plugins", "mimeTypes", "pdfViewerEnabled",
+    "webkitTemporaryStorage", "webkitPersistentStorage",
+    "hardwareConcurrency", "cookieEnabled", "credentials",
+    "mediaDevices", "permissions", "locks", "ink",
+)
+_WINDOW_KEYS = (
+    "Object", "Function", "Array", "Number", "parseFloat",
+    "undefined", "window", "document", "navigator",
+)
 
 
 class SentinelPOWError(RuntimeError):
@@ -26,8 +36,8 @@ class SentinelPOWError(RuntimeError):
 
 def _format_browser_time() -> str:
     """Match the browser-style timestamp used by public Sentinel solvers."""
-    browser_now = datetime.now(timezone(timedelta(hours=-5)))
-    return browser_now.strftime("%a %b %d %Y %H:%M:%S") + " GMT-0500 (Eastern Standard Time)"
+    browser_now = datetime.now(timezone.utc)
+    return browser_now.strftime("%a %b %d %Y %H:%M:%S") + " GMT+0000 (Coordinated Universal Time)"
 
 
 def build_sentinel_config(user_agent: str) -> list:

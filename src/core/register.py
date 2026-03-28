@@ -29,6 +29,9 @@ from ..config.constants import (
     OTP_CODE_PATTERN,
     DEFAULT_PASSWORD_LENGTH,
     PASSWORD_CHARSET,
+    PASSWORD_SPECIAL,
+    PASSWORD_MIN_LENGTH,
+    PASSWORD_MAX_LENGTH,
     AccountStatus,
     TaskStatus,
 )
@@ -185,8 +188,24 @@ class RegistrationEngine:
             logger.info(message)
 
     def _generate_password(self, length: int = DEFAULT_PASSWORD_LENGTH) -> str:
-        """生成随机密码"""
-        return ''.join(secrets.choice(PASSWORD_CHARSET) for _ in range(length))
+        """生成随机密码（随机长度，保证含特殊字符）"""
+        actual_length = random.randint(PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH)
+        # 保证至少包含 1 小写、1 大写、1 数字、1 特殊字符
+        password = [
+            secrets.choice(string.ascii_lowercase),
+            secrets.choice(string.ascii_uppercase),
+            secrets.choice(string.digits),
+            secrets.choice(PASSWORD_SPECIAL),
+        ]
+        password.extend(secrets.choice(PASSWORD_CHARSET) for _ in range(actual_length - 4))
+        secrets.SystemRandom().shuffle(password)
+        return ''.join(password)
+
+    @staticmethod
+    def _human_delay(mean: float = 3.0, std: float = 1.0, minimum: float = 1.0) -> None:
+        """模拟人类操作间隔（正态分布延迟）"""
+        delay = max(random.gauss(mean, std), minimum)
+        time.sleep(delay)
 
     def _check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """检查 IP 地理位置"""
@@ -454,6 +473,9 @@ class RegistrationEngine:
     def _submit_login_password(self) -> SignupFormResult:
         """提交登录密码，进入邮箱验证码页面。"""
         try:
+            # 人类节奏：用户在输入密码，等待 2-5 秒
+            self._human_delay(mean=3.5, std=1.0, minimum=2.0)
+
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["password_verify"],
                 headers={
@@ -521,10 +543,16 @@ class RegistrationEngine:
         if not did:
             return None, None
 
+        # 人类节奏：获取 DID 后等待 1-3 秒
+        self._human_delay(mean=2.0, std=0.7, minimum=1.0)
+
         self._log(f"{label}: 解一道 Sentinel POW 小题，答对才给进...")
         sen_token = self._check_sentinel(did)
         if not sen_token:
             return did, None
+
+        # 人类节奏：Sentinel 通过后等待 1-2 秒
+        self._human_delay(mean=1.5, std=0.5, minimum=0.8)
 
         self._log(f"{label}: Sentinel 点头放行，继续前进")
         return did, sen_token
@@ -2277,6 +2305,9 @@ class RegistrationEngine:
             user_info = generate_random_user_info()
             self._log(f"生成用户信息: {user_info['name']}, 生日: {user_info['birthdate']}")
             create_account_body = json.dumps(user_info)
+
+            # 人类节奏：用户在填写姓名和生日，等待 2-4 秒
+            self._human_delay(mean=3.0, std=0.8, minimum=2.0)
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["create_account"],

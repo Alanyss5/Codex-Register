@@ -176,18 +176,30 @@ OPENAI_VERIFICATION_KEYWORDS = [
 ]
 
 # 密码生成
-PASSWORD_CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+PASSWORD_CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%&*"
+PASSWORD_SPECIAL = "!@#$%&*"
 DEFAULT_PASSWORD_LENGTH = 12
+PASSWORD_MIN_LENGTH = 12
+PASSWORD_MAX_LENGTH = 16
 
 # 用户信息生成（用于注册）
 
-# 常用英文名
 FIRST_NAMES = [
-    "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles",
-    "Emma", "Olivia", "Ava", "Isabella", "Sophia", "Mia", "Charlotte", "Amelia", "Harper", "Evelyn",
-    "Alex", "Jordan", "Taylor", "Morgan", "Casey", "Riley", "Jamie", "Avery", "Quinn", "Skyler",
-    "Liam", "Noah", "Ethan", "Lucas", "Mason", "Oliver", "Elijah", "Aiden", "Henry", "Sebastian",
-    "Grace", "Lily", "Chloe", "Zoey", "Nora", "Aria", "Hazel", "Aurora", "Stella", "Ivy"
+    "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph",
+    "Daniel", "Matthew", "Andrew", "Joshua", "Christopher", "Anthony", "Kevin", "Brian",
+    "Emma", "Olivia", "Ava", "Isabella", "Sophia", "Mia", "Charlotte", "Amelia",
+    "Harper", "Evelyn", "Abigail", "Emily", "Elizabeth", "Natalie", "Victoria", "Samantha",
+    "Liam", "Noah", "Ethan", "Lucas", "Mason", "Oliver", "Elijah", "Aiden",
+    "Henry", "Sebastian", "Jack", "Benjamin", "Logan", "Alexander", "Nathan", "Ryan",
+    "Grace", "Lily", "Chloe", "Zoey", "Nora", "Aria", "Hazel", "Aurora",
+]
+
+LAST_NAMES = [
+    "Smith", "Johnson", "Brown", "Davis", "Wilson", "Moore", "Taylor", "Clark",
+    "Hall", "Young", "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin",
+    "Thompson", "Garcia", "Robinson", "Lewis", "Walker", "Allen", "King", "Wright",
+    "Scott", "Green", "Baker", "Adams", "Nelson", "Carter", "Mitchell", "Roberts",
+    "Turner", "Phillips", "Campbell", "Parker", "Evans", "Edwards", "Collins", "Stewart",
 ]
 
 def generate_random_user_info() -> dict:
@@ -197,8 +209,10 @@ def generate_random_user_info() -> dict:
     Returns:
         包含 name 和 birthdate 的字典
     """
-    # 随机选择名字
-    name = random.choice(FIRST_NAMES)
+    # 随机选择名字（First + Last）
+    first_name = random.choice(FIRST_NAMES)
+    last_name = random.choice(LAST_NAMES)
+    name = f"{first_name} {last_name}"
 
     # 生成随机生日（18-45岁）
     current_year = datetime.now().year
