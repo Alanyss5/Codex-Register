@@ -103,7 +103,7 @@ def start_webui():
 
     # 配置 uvicorn
     uvicorn_config = {
-        "app": "src.web.app:app",
+        "app": app,
         "host": settings.webui_host,
         "port": settings.webui_port,
         "reload": False,

@@ -1,7 +1,10 @@
 import builtins
+import sys
+import types
 
 from fastapi.testclient import TestClient
 
+import webui
 from src.web.app import create_app
 from src.web.routes import api_router
 
@@ -42,3 +45,26 @@ def test_app_startup_tolerates_missing_external_recovery(monkeypatch):
     with TestClient(app) as client:
         response = client.get("/login")
         assert response.status_code == 200
+
+
+def test_start_webui_uses_preloaded_app_instance(monkeypatch):
+    fake_app = object()
+
+    class _Settings:
+        webui_host = "127.0.0.1"
+        webui_port = 1455
+        debug = False
+
+    fake_module = types.ModuleType("src.web.app")
+    fake_module.app = fake_app
+    captured = {}
+
+    monkeypatch.setattr(webui, "setup_application", lambda: _Settings())
+    monkeypatch.setitem(sys.modules, "src.web.app", fake_module)
+    monkeypatch.setattr(webui.uvicorn, "run", lambda **kwargs: captured.update(kwargs))
+
+    webui.start_webui()
+
+    assert captured["app"] is fake_app
+    assert captured["host"] == "127.0.0.1"
+    assert captured["port"] == 1455
