@@ -15,6 +15,7 @@ from curl_cffi.requests import Session, Response
 from ..config.constants import ERROR_MESSAGES
 from ..config.settings import get_settings
 from .openai.sentinel import SentinelPOWError, build_sentinel_pow_token
+from .openai.browser_profile import BrowserProfile, get_random_profile
 
 
 logger = logging.getLogger(__name__)
@@ -237,7 +238,8 @@ class OpenAIHTTPClient(HTTPClient):
     def __init__(
         self,
         proxy_url: Optional[str] = None,
-        config: Optional[RequestConfig] = None
+        config: Optional[RequestConfig] = None,
+        profile: Optional[BrowserProfile] = None,
     ):
         """
         初始化 OpenAI HTTP 客户端
@@ -245,22 +247,31 @@ class OpenAIHTTPClient(HTTPClient):
         Args:
             proxy_url: 代理 URL
             config: 请求配置
+            profile: 浏览器指纹 Profile，不传则随机生成
         """
         super().__init__(proxy_url, config)
+
+        # 浏览器指纹 Profile
+        self.profile = profile or get_random_profile()
+
+        # 用 Profile 的 impersonate 覆盖默认值
+        self.config.impersonate = self.profile.impersonate
 
         # OpenAI 特定的默认配置
         if config is None:
             self.config.timeout = 30
             self.config.max_retries = 3
 
-        # 默认请求头
+        # 默认请求头（从 Profile 取值，保证一致性）
         self.default_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                         "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "User-Agent": self.profile.user_agent,
             "Accept": "application/json",
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
+            "sec-ch-ua": self.profile.sec_ch_ua,
+            "sec-ch-ua-mobile": self.profile.sec_ch_ua_mobile,
+            "sec-ch-ua-platform": self.profile.sec_ch_ua_platform,
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
@@ -364,7 +375,7 @@ class OpenAIHTTPClient(HTTPClient):
         from ..config.constants import OPENAI_API_ENDPOINTS
 
         try:
-            pow_token = build_sentinel_pow_token(self.default_headers.get("User-Agent", ""))
+            pow_token = build_sentinel_pow_token(self.profile.user_agent)
             sen_req_body = json.dumps({
                 "p": pow_token,
                 "id": did,
@@ -373,11 +384,7 @@ class OpenAIHTTPClient(HTTPClient):
 
             response = self.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
-                headers={
-                    "origin": "https://sentinel.openai.com",
-                    "referer": "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6",
-                    "content-type": "text/plain;charset=UTF-8",
-                },
+                headers=self.profile.sentinel_headers(),
                 data=sen_req_body,
             )
 

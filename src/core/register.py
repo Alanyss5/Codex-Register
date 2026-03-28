@@ -253,6 +253,21 @@ class RegistrationEngine:
             self._log(f"初始化会话失败: {e}", "error")
             return False
 
+    def _warm_entry_flow(self) -> None:
+        """轻量模拟 chatgpt.com 首页访问，建立真实 cookie jar 和引荐链。"""
+        try:
+            self._log("模拟浏览器访问 chatgpt.com 首页...")
+            self.session.get(
+                "https://chatgpt.com/",
+                headers=self.http_client.profile.navigation_headers(),
+                timeout=15,
+                allow_redirects=True,
+            )
+            self._human_delay(mean=2.0, std=0.8, minimum=1.0)
+            self._log("chatgpt.com 首页访问完成，cookie jar 已预热")
+        except Exception as e:
+            self._log(f"chatgpt.com 预热失败（不影响注册）: {e}", "warning")
+
     def _get_device_id(self) -> Optional[str]:
         """获取 Device ID"""
         if not self.oauth_start:
@@ -266,6 +281,7 @@ class RegistrationEngine:
 
                 response = self.session.get(
                     self.oauth_start.auth_url,
+                    headers=self.http_client.profile.navigation_headers(),
                     timeout=20
                 )
                 did = self.session.cookies.get("oai-did")
@@ -295,40 +311,18 @@ class RegistrationEngine:
         session_headers = getattr(self.session, "headers", None) or {}
         return session_headers.get("User-Agent") or session_headers.get("user-agent")
 
-    def _make_trace_headers(self) -> Dict[str, str]:
-        trace_id = random.randint(10 ** 17, 10 ** 18 - 1)
-        parent_id = random.randint(10 ** 17, 10 ** 18 - 1)
-        return {
-            "traceparent": f"00-{uuid.uuid4().hex}-{format(parent_id, '016x')}-01",
-            "tracestate": "dd=s:1;o:rum",
-            "x-datadog-origin": "rum",
-            "x-datadog-sampling-priority": "1",
-            "x-datadog-trace-id": str(trace_id),
-            "x-datadog-parent-id": str(parent_id),
-        }
-
     def _build_oauth_json_headers(self, referer: str) -> Dict[str, str]:
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "origin": "https://auth.openai.com",
-            "referer": referer,
-        }
-        user_agent = self._get_session_user_agent()
-        if user_agent:
-            headers["user-agent"] = user_agent
-
         session_cookies = getattr(self.session, "cookies", None) or {}
         device_id = None
         if hasattr(session_cookies, "get"):
             device_id = session_cookies.get("oai-did")
         elif isinstance(session_cookies, dict):
             device_id = session_cookies.get("oai-did")
-        if device_id:
-            headers["oai-device-id"] = device_id
 
-        headers.update(self._make_trace_headers())
-        return headers
+        return self.http_client.profile.json_api_headers(
+            referer=referer,
+            oai_did=device_id,
+        )
 
     def _check_sentinel(self, did: str) -> Optional[str]:
         """检查 Sentinel 拦截"""
@@ -372,11 +366,10 @@ class RegistrationEngine:
 
             request_body = json.dumps(request_payload)
 
-            headers = {
-                "referer": referer,
-                "accept": "application/json",
-                "content-type": "application/json",
-            }
+            headers = self.http_client.profile.json_api_headers(
+                referer=referer,
+                oai_did=session_cookies.get("oai-did") if hasattr(session_cookies := (getattr(self.session, "cookies", None) or {}), "get") else None,
+            )
 
             if sen_token:
                 sentinel = json.dumps({
@@ -478,11 +471,9 @@ class RegistrationEngine:
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["password_verify"],
-                headers={
-                    "referer": "https://auth.openai.com/log-in/password",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=self.http_client.profile.json_api_headers(
+                    referer="https://auth.openai.com/log-in/password",
+                ),
                 data=json.dumps({"password": self.password}),
             )
 
@@ -533,6 +524,9 @@ class RegistrationEngine:
         self._log(f"{label}: 先把会话热热身...")
         if not self._init_session():
             return None, None
+
+        # 入口流模拟：先访问 chatgpt.com 首页，建立真实的 cookie 和引荐链
+        self._warm_entry_flow()
 
         self._log(f"{label}: OAuth 流程准备开跑，系好鞋带...")
         if not self._start_oauth():
@@ -2220,11 +2214,9 @@ class RegistrationEngine:
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["validate_otp"],
-                headers={
-                    "referer": "https://auth.openai.com/email-verification",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=self.http_client.profile.json_api_headers(
+                    referer="https://auth.openai.com/email-verification",
+                ),
                 data=code_body,
             )
 
@@ -2311,11 +2303,9 @@ class RegistrationEngine:
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["create_account"],
-                headers={
-                    "referer": "https://auth.openai.com/about-you",
-                    "accept": "application/json",
-                    "content-type": "application/json",
-                },
+                headers=self.http_client.profile.json_api_headers(
+                    referer="https://auth.openai.com/about-you",
+                ),
                 data=create_account_body,
             )
 
