@@ -1,10 +1,15 @@
 import builtins
+import shutil
 import sys
+import tempfile
 import types
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 import webui
+import src.config.settings as settings_module
+import src.database.session as db_session
 from src.web.app import create_app
 from src.web.routes import api_router
 
@@ -68,3 +73,42 @@ def test_start_webui_uses_preloaded_app_instance(monkeypatch):
     assert captured["app"] is fake_app
     assert captured["host"] == "127.0.0.1"
     assert captured["port"] == 1455
+
+
+def test_setup_application_refreshes_stale_settings_cache(monkeypatch):
+    from src.database.init_db import initialize_database
+
+    temp_root = Path(tempfile.mkdtemp())
+    try:
+        data_dir = temp_root / "data"
+        logs_dir = temp_root / "logs"
+        data_dir.mkdir()
+        logs_dir.mkdir()
+
+        monkeypatch.setattr(webui, "project_root", temp_root)
+        monkeypatch.setenv("APP_DATA_DIR", str(data_dir))
+        monkeypatch.setenv("APP_LOGS_DIR", str(logs_dir))
+        monkeypatch.setattr(db_session, "_db_manager", None)
+        monkeypatch.setattr(settings_module, "_settings", None)
+        monkeypatch.setattr(webui, "setup_logging", lambda **kwargs: None)
+
+        initialize_database()
+        settings_module.update_settings(
+            external_api_enabled=True,
+            external_api_key="test-external-key",
+        )
+
+        monkeypatch.setattr(
+            settings_module,
+            "_settings",
+            settings_module.Settings(external_api_enabled=False),
+        )
+
+        settings = webui.setup_application()
+
+        assert settings.external_api_enabled is True
+        assert settings.external_api_key.get_secret_value() == "test-external-key"
+        db_session._db_manager.engine.dispose()
+        monkeypatch.setattr(db_session, "_db_manager", None)
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)

@@ -754,6 +754,13 @@ def update_settings(**kwargs) -> Settings:
     return _settings
 
 
+def reload_settings() -> Settings:
+    """清空缓存并从数据库重新加载配置。"""
+    global _settings
+    _settings = None
+    return get_settings()
+
+
 def get_database_url() -> str:
     """
     获取数据库 URL（处理相对路径）

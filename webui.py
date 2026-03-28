@@ -32,7 +32,7 @@ sys.path.insert(0, str(_src_root))
 
 from src.core.utils import setup_logging
 from src.database.init_db import initialize_database
-from src.config.settings import get_settings
+from src.config.settings import get_settings, reload_settings
 
 
 def _load_dotenv():
@@ -75,7 +75,7 @@ def setup_application():
         raise
 
     # 获取配置（需要数据库已初始化）
-    settings = get_settings()
+    settings = reload_settings()
 
     # 配置日志（日志文件写到实际 logs 目录）
     log_file = str(logs_dir / Path(settings.log_file).name)
@@ -134,6 +134,8 @@ def main():
     parser.add_argument("--log-level", help="日志级别 (也可通过 LOG_LEVEL 环境变量设置)")
     parser.add_argument("--access-password", help="Web UI 访问密钥 (也可通过 WEBUI_ACCESS_PASSWORD 环境变量设置)")
     args = parser.parse_args()
+
+    initialize_database()
 
     # 更新配置
     from src.config.settings import update_settings
