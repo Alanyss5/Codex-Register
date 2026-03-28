@@ -345,12 +345,12 @@ async function loadSettings() {
         // 加载 Outlook 设置
         loadOutlookSettings();
 
-        // Web UI access password hint
+        // Web UI 访问密码提示
         if (data.webui?.has_access_password) {
             const input = document.getElementById('webui-access-password');
             if (input) {
                 input.value = '';
-                input.placeholder = 'Configured; leave blank to keep unchanged';
+                input.placeholder = '已配置，留空保持不变';
             }
         }
 
@@ -365,10 +365,10 @@ async function loadSettings() {
             if (keyInput) {
                 keyInput.value = '';
                 keyInput.placeholder = data.external_api.has_api_key
-                    ? 'Configured; leave blank to keep unchanged'
-                    : 'Enter External API key';
+                    ? '已配置，留空保持不变'
+                    : '请输入 External API Key';
             }
-            if (statusEl) statusEl.textContent = data.external_api.has_api_key ? 'Configured' : 'Not configured';
+            if (statusEl) statusEl.textContent = data.external_api.has_api_key ? '已配置' : '未配置';
             if (headerEl) headerEl.textContent = data.external_api.api_key_header || 'X-API-Key';
             if (baseUrlEl) baseUrlEl.textContent = `${window.location.origin}/api`;
         }
@@ -409,12 +409,12 @@ async function handleSaveExternalApiSettings(e) {
 
     try {
         await api.post('/settings/external-api', payload);
-        toast.success('External API settings updated');
+        toast.success('External API 设置已更新');
         document.getElementById('external-api-key').value = '';
         await loadSettings();
     } catch (error) {
-        console.error('Failed to save External API settings:', error);
-        toast.error('Failed to save External API settings');
+        console.error('保存 External API 设置失败:', error);
+        toast.error('保存 External API 设置失败');
     }
 }
 

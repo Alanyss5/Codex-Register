@@ -18,3 +18,4 @@ def test_settings_template_contains_external_api_controls():
     assert 'id="external-api-settings-form"' in template
     assert 'id="external-api-enabled"' in template
     assert 'id="external-api-key"' in template
+    assert "启用 External API" in template

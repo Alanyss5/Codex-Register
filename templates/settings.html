@@ -134,17 +134,17 @@
             <div class="tab-content" id="webui-tab">
                 <div class="card">
                     <div class="card-header">
-                        <h3>Web UI Access Password</h3>
-                        <span class="hint">Used for opening the web interface. Leave blank to keep the current password.</span>
+                        <h3>Web UI 访问密码</h3>
+                        <span class="hint">用于打开网页界面，留空表示保持当前密码不变。</span>
                     </div>
                     <div class="card-body">
                         <form id="webui-settings-form">
                             <div class="form-group">
-                                <label for="webui-access-password">Access Password</label>
-                                <input type="password" id="webui-access-password" name="access_password" placeholder="Leave blank to keep unchanged" autocomplete="new-password">
+                                <label for="webui-access-password">访问密码</label>
+                                <input type="password" id="webui-access-password" name="access_password" placeholder="留空保持不变" autocomplete="new-password">
                             </div>
                             <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Settings</button>
+                                <button type="submit" class="btn btn-primary">保存设置</button>
                             </div>
                         </form>
                     </div>
@@ -153,20 +153,20 @@
                 <div class="card" style="margin-top: var(--spacing-lg);">
                     <div class="card-header">
                         <h3>External API</h3>
-                        <span class="hint">Use this to enable third-party access to /api/external/* endpoints.</span>
+                        <span class="hint">用于给第三方开放 /api/external/* 接口访问。</span>
                     </div>
                     <div class="card-body">
                         <form id="external-api-settings-form">
                             <div class="form-group">
                                 <label>
                                     <input type="checkbox" id="external-api-enabled" name="enabled">
-                                    Enable External API
+                                    启用 External API
                                 </label>
                             </div>
                             <div class="form-group">
                                 <label for="external-api-key">API Key</label>
-                                <input type="password" id="external-api-key" name="api_key" placeholder="Leave blank to keep unchanged" autocomplete="new-password">
-                                <small style="color: var(--text-muted);">Current status: <span id="external-api-key-status">Not configured</span>. Saving with a blank field will keep the existing key.</small>
+                                <input type="password" id="external-api-key" name="api_key" placeholder="留空保持不变" autocomplete="new-password">
+                                <small style="color: var(--text-muted);">当前状态：<span id="external-api-key-status">未配置</span>。如果留空保存，会保留现有 Key。</small>
                             </div>
                             <div class="info-grid" style="margin-bottom: var(--spacing-md);">
                                 <div class="info-item">
@@ -180,12 +180,12 @@
                             </div>
                             <div class="form-group">
                                 <small style="color: var(--text-muted); display: block; line-height: 1.6;">
-                                    Turn the feature on here. After saving, send the Base URL and X-API-Key to the external team.<br>
-                                    Reference: docs/third-party-integration-guide.md
+                                    就在这里开启。保存后，把上面的 Base URL 和 X-API-Key 提供给对接方即可。<br>
+                                    参考文档：docs/third-party-integration-guide.md
                                 </small>
                             </div>
                             <div class="form-actions">
-                                <button type="submit" class="btn btn-primary">Save Settings</button>
+                                <button type="submit" class="btn btn-primary">保存设置</button>
                             </div>
                         </form>
                     </div>
