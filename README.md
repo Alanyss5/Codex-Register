@@ -54,6 +54,7 @@
 - [External API 第三方对接速览](docs/external-api-quickstart.md)
 - [第三方技术对接文档](docs/third-party-integration-guide.md)
 - [External API 网站内管理与 API Key 生成方案](docs/external-api-webui-management-plan.md)
+- [HTTP-Only 设备指纹补强建议](docs/http-only-device-fingerprint-hardening.md)
 
 ## 环境要求
 
