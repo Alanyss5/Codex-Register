@@ -59,6 +59,12 @@ class WebUISettings(BaseModel):
     access_password: Optional[str] = None
 
 
+class ExternalApiSettings(BaseModel):
+    """External API settings."""
+    enabled: bool = False
+    api_key: Optional[str] = None
+
+
 class AllSettings(BaseModel):
     """所有设置"""
     proxy: ProxySettings
@@ -99,6 +105,11 @@ async def get_all_settings():
             "port": settings.webui_port,
             "debug": settings.debug,
             "has_access_password": bool(settings.webui_access_password and settings.webui_access_password.get_secret_value()),
+        },
+        "external_api": {
+            "enabled": settings.external_api_enabled,
+            "has_api_key": bool(settings.external_api_key and settings.external_api_key.get_secret_value()),
+            "api_key_header": "X-API-Key",
         },
         "tempmail": {
             "base_url": settings.tempmail_base_url,
@@ -240,6 +251,25 @@ async def update_webui_settings(request: WebUISettings):
 
     update_settings(**update_dict)
     return {"success": True, "message": "Web UI 设置已更新"}
+
+
+@router.post("/external-api")
+async def update_external_api_settings(request: ExternalApiSettings):
+    """Update External API settings."""
+    update_dict = {
+        "external_api_enabled": request.enabled,
+    }
+
+    api_key = (request.api_key or "").strip()
+    if api_key:
+        update_dict["external_api_key"] = api_key
+
+    update_settings(**update_dict)
+    return {
+        "success": True,
+        "message": "External API settings updated",
+        "has_api_key": True if "external_api_key" in update_dict else None,
+    }
 
 
 @router.get("/database")

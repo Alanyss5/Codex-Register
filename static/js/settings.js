@@ -71,7 +71,8 @@ const elements = {
     // Outlook 设置
     outlookSettingsForm: document.getElementById('outlook-settings-form'),
     // Web UI 访问控制
-    webuiSettingsForm: document.getElementById('webui-settings-form')
+    webuiSettingsForm: document.getElementById('webui-settings-form'),
+    externalApiForm: document.getElementById('external-api-settings-form')
 };
 
 // 选中的服务 ID
@@ -247,6 +248,9 @@ function initEventListeners() {
     if (elements.webuiSettingsForm) {
         elements.webuiSettingsForm.addEventListener('submit', handleSaveWebuiSettings);
     }
+    if (elements.externalApiForm) {
+        elements.externalApiForm.addEventListener('submit', handleSaveExternalApiSettings);
+    }
     // Team Manager 服务管理
     if (elements.addTmServiceBtn) {
         elements.addTmServiceBtn.addEventListener('click', () => openTmServiceModal());
@@ -341,13 +345,32 @@ async function loadSettings() {
         // 加载 Outlook 设置
         loadOutlookSettings();
 
-        // Web UI 访问密码提示
+        // Web UI access password hint
         if (data.webui?.has_access_password) {
             const input = document.getElementById('webui-access-password');
             if (input) {
                 input.value = '';
-                input.placeholder = '已配置，留空保持不变';
+                input.placeholder = 'Configured; leave blank to keep unchanged';
             }
+        }
+
+        if (data.external_api) {
+            const enabledInput = document.getElementById('external-api-enabled');
+            const keyInput = document.getElementById('external-api-key');
+            const statusEl = document.getElementById('external-api-key-status');
+            const headerEl = document.getElementById('external-api-header');
+            const baseUrlEl = document.getElementById('external-api-base-url');
+
+            if (enabledInput) enabledInput.checked = !!data.external_api.enabled;
+            if (keyInput) {
+                keyInput.value = '';
+                keyInput.placeholder = data.external_api.has_api_key
+                    ? 'Configured; leave blank to keep unchanged'
+                    : 'Enter External API key';
+            }
+            if (statusEl) statusEl.textContent = data.external_api.has_api_key ? 'Configured' : 'Not configured';
+            if (headerEl) headerEl.textContent = data.external_api.api_key_header || 'X-API-Key';
+            if (baseUrlEl) baseUrlEl.textContent = `${window.location.origin}/api`;
         }
 
     } catch (error) {
@@ -376,6 +399,25 @@ async function handleSaveWebuiSettings(e) {
 }
 
 // 加载邮箱服务
+async function handleSaveExternalApiSettings(e) {
+    e.preventDefault();
+
+    const payload = {
+        enabled: document.getElementById('external-api-enabled').checked,
+        api_key: document.getElementById('external-api-key').value
+    };
+
+    try {
+        await api.post('/settings/external-api', payload);
+        toast.success('External API settings updated');
+        document.getElementById('external-api-key').value = '';
+        await loadSettings();
+    } catch (error) {
+        console.error('Failed to save External API settings:', error);
+        toast.error('Failed to save External API settings');
+    }
+}
+
 async function loadEmailServices() {
     // 检查元素是否存在
     if (!elements.emailServicesTable) return;
