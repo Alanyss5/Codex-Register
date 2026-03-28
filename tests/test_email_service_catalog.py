@@ -31,6 +31,17 @@ def _make_db(name: str):
     return manager
 
 
+def test_build_external_capabilities_does_not_expose_legacy_tempmail_placeholder(monkeypatch):
+    manager = _make_db("email_service_catalog_no_legacy_tempmail.db")
+
+    monkeypatch.setattr(email_service_catalog, "get_db", lambda: _session_context(manager))
+    monkeypatch.setattr(email_service_catalog, "get_settings", lambda: DummySettings())
+
+    payload = email_service_catalog.build_external_capabilities()
+
+    assert payload["email_types"] == []
+
+
 def test_build_external_capabilities_survives_temp_mail_configs_without_worker_credentials(monkeypatch):
     manager = _make_db("email_service_catalog_capabilities.db")
     with manager.session_scope() as session:
@@ -52,8 +63,7 @@ def test_build_external_capabilities_survives_temp_mail_configs_without_worker_c
 
     payload = email_service_catalog.build_external_capabilities()
 
-    built_in = next(item for item in payload["email_types"] if item["type"] == "tempmail")
-    assert built_in["available"] is True
+    assert all(item["type"] != "tempmail" for item in payload["email_types"])
 
     temp_mail = next(item for item in payload["email_types"] if item["type"] == "temp_mail")
     assert temp_mail["available"] is True

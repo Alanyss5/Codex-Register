@@ -109,14 +109,7 @@ def build_external_capabilities() -> Dict[str, Any]:
         for service in enabled_email_services:
             grouped.setdefault(service.service_type, []).append(service)
 
-        email_types = [
-            {
-                "type": "tempmail",
-                "available": True,
-                "count": 1,
-                "services": [{"id": None, "name": "Tempmail.lol", "type": "tempmail"}],
-            }
-        ]
+        email_types = []
 
         ordered_types = [service_type for service_type in _TEMP_MAIL_ORDER if service_type in grouped]
         remaining_types = sorted(service_type for service_type in grouped.keys() if service_type not in _TEMP_MAIL_ORDER)

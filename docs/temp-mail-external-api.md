@@ -148,10 +148,11 @@ GET /api/external/capabilities
 - 当前可用上传目标
 - 外部 API 是否启用
 
-其中邮箱类型同时包含：
+其中邮箱类型包含数据库内启用的：
 
-- 内置 `tempmail`
-- 数据库内启用的 `outlook` / `moe_mail` / `temp_mail` / `duck_mail` / `freemail` / `imap_mail`
+- `outlook` / `moe_mail` / `temp_mail` / `duck_mail` / `freemail` / `imap_mail`
+
+其中临时邮箱能力在外部 API 中统一使用 `temp_mail` 枚举，不再暴露旧的 `tempmail` 占位。
 
 能力接口返回的每个可选服务，都会带：
 

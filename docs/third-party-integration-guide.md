@@ -92,18 +92,6 @@ X-API-Key: your_api_key
 {
   "email_types": [
     {
-      "type": "tempmail",
-      "available": true,
-      "count": 1,
-      "services": [
-        {
-          "id": null,
-          "name": "Tempmail.lol",
-          "type": "tempmail"
-        }
-      ]
-    },
-    {
       "type": "temp_mail",
       "available": true,
       "count": 2,
@@ -252,7 +240,7 @@ X-API-Key: your_api_key
 | --- | --- | --- |
 | `count` | 是 | 注册数量，范围 `1 ~ 100` |
 | `idempotency_key` | 否 | 幂等键，建议传 |
-| `email.type` | 是 | 邮箱类型，如 `temp_mail` / `tempmail` / `outlook` |
+| `email.type` | 是 | 邮箱类型，如 `temp_mail` / `outlook` |
 | `email.service_id` | 否 | 指定某个邮箱服务，来源于 `capabilities` |
 | `upload.enabled` | 是 | 是否上传 |
 | `upload.provider` | 条件必填 | `upload.enabled=true` 时必填，支持 `sub2api` / `cpa` / `tm` |
