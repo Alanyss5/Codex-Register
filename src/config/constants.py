@@ -185,21 +185,58 @@ PASSWORD_MAX_LENGTH = 16
 # 用户信息生成（用于注册）
 
 FIRST_NAMES = [
+    # Male (traditional)
     "James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph",
     "Daniel", "Matthew", "Andrew", "Joshua", "Christopher", "Anthony", "Kevin", "Brian",
+    "Thomas", "Charles", "Steven", "Timothy", "Mark", "Edward", "Jason", "Jeffrey",
+    "George", "Kenneth", "Patrick", "Dennis", "Scott", "Paul", "Larry", "Gregory",
+    "Raymond", "Peter", "Stephen", "Frank", "Adam", "Aaron", "Nathan", "Ryan",
+    # Female (traditional)
     "Emma", "Olivia", "Ava", "Isabella", "Sophia", "Mia", "Charlotte", "Amelia",
     "Harper", "Evelyn", "Abigail", "Emily", "Elizabeth", "Natalie", "Victoria", "Samantha",
+    "Jennifer", "Jessica", "Sarah", "Karen", "Nancy", "Lisa", "Betty", "Margaret",
+    "Sandra", "Ashley", "Dorothy", "Kimberly", "Donna", "Carol", "Michelle", "Amanda",
+    "Melissa", "Stephanie", "Rebecca", "Sharon", "Laura", "Cynthia", "Angela", "Anna",
+    # Modern / Trending
     "Liam", "Noah", "Ethan", "Lucas", "Mason", "Oliver", "Elijah", "Aiden",
-    "Henry", "Sebastian", "Jack", "Benjamin", "Logan", "Alexander", "Nathan", "Ryan",
+    "Henry", "Sebastian", "Jack", "Benjamin", "Logan", "Alexander", "Owen", "Caleb",
     "Grace", "Lily", "Chloe", "Zoey", "Nora", "Aria", "Hazel", "Aurora",
+    "Luna", "Stella", "Violet", "Penelope", "Riley", "Layla", "Willow", "Ivy",
+    "Eleanor", "Hannah", "Addison", "Ellie", "Leah", "Savannah", "Audrey", "Brooklyn",
+    # Multi-ethnic (Hispanic/Asian/etc.)
+    "Carlos", "Miguel", "Luis", "Diego", "Sofia", "Valentina", "Camila", "Isabella",
+    "Marco", "Antonio", "Rafael", "Alejandro", "Maria", "Carmen", "Ana", "Rosa",
+    "Wei", "Ming", "Jun", "Yuki", "Kenji", "Hiroshi", "Sakura", "Mei",
+    "Jin", "Seo", "Min", "Jae", "Yuna", "Hana", "Ravi", "Priya",
+    "Arjun", "Ananya", "Vikram", "Neha", "Rohan", "Sanjay", "Deepa", "Anika",
+    "Omar", "Hassan", "Fatima", "Amir", "Leila", "Ali", "Zara", "Yasmin",
+    "Pavel", "Andrei", "Natasha", "Elena", "Viktor", "Katarina", "Ivan", "Olga",
+    "Jayden", "Tyler", "Dylan", "Carter", "Luke", "Isaac", "Gabriel", "Julian",
+    "Madeline", "Clara", "Alice", "Scarlett", "Autumn", "Naomi", "Ruby", "Eva",
 ]
 
 LAST_NAMES = [
+    # Most common US
     "Smith", "Johnson", "Brown", "Davis", "Wilson", "Moore", "Taylor", "Clark",
     "Hall", "Young", "Anderson", "Thomas", "Jackson", "White", "Harris", "Martin",
     "Thompson", "Garcia", "Robinson", "Lewis", "Walker", "Allen", "King", "Wright",
     "Scott", "Green", "Baker", "Adams", "Nelson", "Carter", "Mitchell", "Roberts",
     "Turner", "Phillips", "Campbell", "Parker", "Evans", "Edwards", "Collins", "Stewart",
+    # Additional diversity
+    "Murphy", "Rivera", "Cook", "Rogers", "Morgan", "Peterson", "Cooper", "Reed",
+    "Bailey", "Bell", "Gonzalez", "Howard", "Ward", "Torres", "Flores", "Gutierrez",
+    "Morris", "Nguyen", "Reyes", "Cruz", "Ortiz", "Ramos", "Mendoza", "Morales",
+    "Sullivan", "Russell", "Griffin", "Diaz", "Hayes", "Myers", "Ford", "Hamilton",
+    "Graham", "Pierce", "Ferguson", "Porter", "Hawkins", "Long", "Patterson", "Hughes",
+    "Washington", "Butler", "Simmons", "Foster", "Bryant", "Alexander", "Price", "Sanders",
+    "Bennett", "Wood", "Barnes", "Ross", "Henderson", "Coleman", "Jenkins", "Perry",
+    "Powell", "Dunn", "Kim", "Lee", "Chen", "Wang", "Liu", "Zhang",
+    "Patel", "Singh", "Kumar", "Shah", "Khan", "Ali", "Ahmed", "Park",
+    "Choi", "Kang", "Cho", "Watanabe", "Tanaka", "Nakamura", "Petrov", "Ivanov",
+    "Miller", "Weber", "Schneider", "Fischer", "Muller", "Costa", "Santos", "Silva",
+    "Owen", "Hoffman", "Keller", "Brooks", "Fox", "Stone", "Hart", "Hunt",
+    "Mason", "Black", "Cole", "Wallace", "West", "Jordan", "Webb", "Arnold",
+    "Burns", "Ellis", "Kelley", "Dixon", "Hogan", "Palmer", "Dunn", "Carr",
 ]
 
 def generate_random_user_info() -> dict:

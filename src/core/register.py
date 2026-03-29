@@ -207,6 +207,29 @@ class RegistrationEngine:
         delay = max(random.gauss(mean, std), minimum)
         time.sleep(delay)
 
+    def _trace_exit_ip(self, tag: str) -> None:
+        """追踪当前出口 IP 和节点，通过原生的 cdn-cgi 获取"""
+        if not self.session:
+            return
+        try:
+            r = self.session.get("https://auth.openai.com/cdn-cgi/trace", timeout=10)
+            if r.status_code == 200:
+                ip_str = "-"
+                colo_str = "-"
+                loc_str = "-"
+                for line in r.text.split('\n'):
+                    if line.startswith('ip='):
+                        ip_str = line[3:].strip()
+                    elif line.startswith('colo='):
+                        colo_str = line[5:].strip()
+                    elif line.startswith('loc='):
+                        loc_str = line[4:].strip()
+                self._log(f"🌍 [IP 追踪 - {tag}] 出口IP: {ip_str} | 节点: {colo_str} | 国家: {loc_str}")
+            else:
+                self._log(f"🌍 [IP 追踪 - {tag}] 追踪请求失败: HTTP {r.status_code}", "warning")
+        except Exception as e:
+            self._log(f"🌍 [IP 追踪 - {tag}] 无法获取出口IP: {e}", "warning")
+
     def _check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """检查 IP 地理位置"""
         try:
@@ -254,19 +277,108 @@ class RegistrationEngine:
             return False
 
     def _warm_entry_flow(self) -> None:
-        """轻量模拟 chatgpt.com 首页访问，建立真实 cookie jar 和引荐链。"""
+        """
+        完整的入口流模拟，对齐真实浏览器注册行为：
+          Step 1: GET chatgpt.com/             → 获取初始 cookies
+          Step 2: GET chatgpt.com/api/auth/csrf → 获取 CSRF token
+          Step 3: POST chatgpt.com/api/auth/signin/openai → 获取 authorize URL
+        """
+        base = "https://chatgpt.com"
+
+        # Step 1: 首页访问
         try:
-            self._log("模拟浏览器访问 chatgpt.com 首页...")
+            self._log("入口模拟: Step 1 — 访问 chatgpt.com 首页...")
+            self._trace_exit_ip("入口模拟起步")
             self.session.get(
-                "https://chatgpt.com/",
+                f"{base}/",
                 headers=self.http_client.profile.navigation_headers(),
                 timeout=15,
                 allow_redirects=True,
             )
-            self._human_delay(mean=2.0, std=0.8, minimum=1.0)
-            self._log("chatgpt.com 首页访问完成，cookie jar 已预热")
+            self._human_delay(mean=1.5, std=0.5, minimum=0.8)
         except Exception as e:
-            self._log(f"chatgpt.com 预热失败（不影响注册）: {e}", "warning")
+            self._log(f"入口模拟: 首页访问失败（不影响注册）: {e}", "warning")
+            return
+
+        # Step 2: CSRF token
+        csrf_token = None
+        try:
+            self._log("入口模拟: Step 2 — 获取 CSRF token...")
+            csrf_resp = self.session.get(
+                f"{base}/api/auth/csrf",
+                headers={
+                    "accept": "application/json",
+                    "referer": f"{base}/",
+                    "user-agent": self.http_client.profile.user_agent,
+                },
+                timeout=10,
+            )
+            if csrf_resp.status_code == 200:
+                csrf_token = csrf_resp.json().get("csrfToken", "")
+                if csrf_token:
+                    self._log("入口模拟: CSRF token 获取成功")
+                else:
+                    self._log("入口模拟: CSRF 响应中无 token", "warning")
+            else:
+                self._log(f"入口模拟: CSRF 请求失败 HTTP {csrf_resp.status_code}", "warning")
+        except Exception as e:
+            self._log(f"入口模拟: CSRF 获取异常: {e}", "warning")
+
+        self._human_delay(mean=1.0, std=0.3, minimum=0.5)
+
+        # Step 3: signin/openai（需要 email + CSRF）
+        if csrf_token and self.email:
+            try:
+                self._log("入口模拟: Step 3 — POST signin/openai...")
+                auth_session_logging_id = str(uuid.uuid4())
+                # 保存到实例，后续流程可能用到
+                self._auth_session_logging_id = auth_session_logging_id
+
+                device_id = self.session.cookies.get("oai-did") or str(uuid.uuid4())
+                signin_params = {
+                    "prompt": "login",
+                    "ext-oai-did": device_id,
+                    "auth_session_logging_id": auth_session_logging_id,
+                    "screen_hint": "login_or_signup",
+                    "login_hint": self.email,
+                }
+                signin_resp = self.session.post(
+                    f"{base}/api/auth/signin/openai",
+                    params=signin_params,
+                    data={
+                        "callbackUrl": f"{base}/",
+                        "csrfToken": csrf_token,
+                        "json": "true",
+                    },
+                    headers={
+                        "content-type": "application/x-www-form-urlencoded",
+                        "accept": "application/json",
+                        "referer": f"{base}/",
+                        "origin": base,
+                        "user-agent": self.http_client.profile.user_agent,
+                    },
+                    timeout=15,
+                )
+                if signin_resp.status_code == 200:
+                    signin_data = signin_resp.json()
+                    authorize_url = signin_data.get("url", "")
+                    if authorize_url:
+                        self._log("入口模拟: signin 成功，获取到 authorize URL")
+                        # 存储供后续流程使用（如果需要）
+                        self._signin_authorize_url = authorize_url
+                    else:
+                        self._log("入口模拟: signin 响应中无 URL", "warning")
+                else:
+                    self._log(f"入口模拟: signin 失败 HTTP {signin_resp.status_code}", "warning")
+            except Exception as e:
+                self._log(f"入口模拟: signin 异常: {e}", "warning")
+        elif not self.email:
+            self._log("入口模拟: email 尚未设置，跳过 Step 3 (signin)", "warning")
+        elif not csrf_token:
+            self._log("入口模拟: 无 CSRF token，跳过 Step 3 (signin)", "warning")
+
+        self._human_delay(mean=1.5, std=0.5, minimum=0.8)
+        self._log("入口流模拟完成")
 
     def _get_device_id(self) -> Optional[str]:
         """获取 Device ID"""
@@ -325,11 +437,21 @@ class RegistrationEngine:
         )
 
     def _check_sentinel(self, did: str) -> Optional[str]:
-        """检查 Sentinel 拦截"""
+        """检查 Sentinel 拦截（两步制）"""
         try:
             sen_token = self.http_client.check_sentinel(did)
             if sen_token:
-                self._log(f"Sentinel token 获取成功")
+                # 解析结果用于诊断日志
+                try:
+                    parsed = json.loads(sen_token)
+                    p_prefix = parsed.get("p", "")[:10]
+                    has_c = bool(parsed.get("c"))
+                    self._log(
+                        f"Sentinel 两步制成功: p={p_prefix}... c={'✓' if has_c else '✗'} "
+                        f"flow={parsed.get('flow', '?')}"
+                    )
+                except Exception:
+                    self._log("Sentinel token 获取成功")
                 return sen_token
             self._log("Sentinel 检查失败: 未获取到 token", "warning")
             return None
@@ -372,14 +494,7 @@ class RegistrationEngine:
             )
 
             if sen_token:
-                sentinel = json.dumps({
-                    "p": "",
-                    "t": "",
-                    "c": sen_token,
-                    "id": did,
-                    "flow": "authorize_continue",
-                })
-                headers["openai-sentinel-token"] = sentinel
+                headers["openai-sentinel-token"] = sen_token
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["signup"],
@@ -533,6 +648,7 @@ class RegistrationEngine:
             return None, None
 
         self._log(f"{label}: 领取 Device ID 通行证...")
+        self._trace_exit_ip(f"{label}_DeviceID前")
         did = self._get_device_id()
         if not did:
             return None, None
@@ -584,6 +700,7 @@ class RegistrationEngine:
 
         if self._account_created and not self._token_acquisition_requires_login:
             self._log("建号后先尝试沿当前会话完成 OAuth，避免过早重新登录")
+            self._trace_exit_ip("建号后OAuth恢复")
             callback_url, workspace_id, resolution_error = self._resolve_oauth_callback_url()
             if workspace_id:
                 result.workspace_id = workspace_id
@@ -1011,10 +1128,7 @@ class RegistrationEngine:
                 "accept": "application/json",
                 "referer": "https://chatgpt.com/",
                 "origin": "https://chatgpt.com",
-                "user-agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-                ),
+                "user-agent": self.http_client.profile.user_agent,
                 "cache-control": "no-cache",
                 "pragma": "no-cache",
             }
@@ -1875,21 +1989,12 @@ class RegistrationEngine:
                 "username": self.email
             })
 
-            headers = {
-                "referer": "https://auth.openai.com/create-account/password",
-                "accept": "application/json",
-                "content-type": "application/json",
-            }
+            headers = self.http_client.profile.json_api_headers(
+                referer="https://auth.openai.com/create-account/password",
+            )
 
             if sen_token:
-                sentinel = json.dumps({
-                    "p": "",
-                    "t": "",
-                    "c": sen_token,
-                    "id": did,
-                    "flow": "authorize_continue",
-                })
-                headers["openai-sentinel-token"] = sentinel
+                headers["openai-sentinel-token"] = sen_token
 
             response = self.session.post(
                 OPENAI_API_ENDPOINTS["register"],
@@ -3595,16 +3700,9 @@ class RegistrationEngine:
         try:
             import re
 
-            headers = {
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Upgrade-Insecure-Requests": "1",
-            }
-            session_headers = getattr(self.session, "headers", None) or {}
-            user_agent = session_headers.get("User-Agent") or session_headers.get("user-agent")
-            if user_agent:
-                headers["User-Agent"] = user_agent
-            if referer:
-                headers["Referer"] = referer
+            headers = self.http_client.profile.navigation_headers(
+                referer=referer,
+            )
 
             response = self.session.get(
                 url,
@@ -3795,16 +3893,9 @@ class RegistrationEngine:
                     f"重定向 {i+1}/{max_redirects}: {self._sanitize_url_for_log(current_url)[:160]}"
                 )
 
-                headers = {
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Upgrade-Insecure-Requests": "1",
-                }
-                session_headers = getattr(self.session, "headers", None) or {}
-                user_agent = session_headers.get("User-Agent") or session_headers.get("user-agent")
-                if user_agent:
-                    headers["User-Agent"] = user_agent
-                if referer_url:
-                    headers["Referer"] = referer_url
+                headers = self.http_client.profile.navigation_headers(
+                    referer=referer_url,
+                )
 
                 response = self.session.get(
                     current_url,
@@ -3916,7 +4007,9 @@ class RegistrationEngine:
             token_info = self.oauth_manager.handle_callback(
                 callback_url=callback_url,
                 expected_state=self.oauth_start.state,
-                code_verifier=self.oauth_start.code_verifier
+                code_verifier=self.oauth_start.code_verifier,
+                impersonate=self.http_client.profile.impersonate,
+                user_agent=self.http_client.profile.user_agent,
             )
 
             self._workspace_context["token_info"] = token_info

@@ -41,16 +41,31 @@ class BrowserProfile:
     sec_ch_ua: str
     sec_ch_ua_mobile: str = "?0"
     sec_ch_ua_platform: str = '"Windows"'
+    # 扩展 Client Hints（真实浏览器在 Accept-CH 响应后回传）
+    sec_ch_ua_arch: str = '"x86"'
+    sec_ch_ua_bitness: str = '"64"'
+    sec_ch_ua_full_version: str = ""  # 由工厂填充
+    sec_ch_ua_platform_version: str = ""  # 由工厂填充
 
-    # ---- 通用 sec-ch-ua 三件套 ----
+    # ---- 通用 sec-ch-ua headers（含扩展 Client Hints）----
 
     def _ch_ua_headers(self) -> Dict[str, str]:
-        """返回 sec-ch-ua 三件套，Chrome 每个 HTTPS 请求默认发送。"""
-        return {
+        """返回完整的 sec-ch-ua 头部集。Chrome 在 HTTPS 请求中发送这些字段。"""
+        headers = {
             "sec-ch-ua": self.sec_ch_ua,
             "sec-ch-ua-mobile": self.sec_ch_ua_mobile,
             "sec-ch-ua-platform": self.sec_ch_ua_platform,
         }
+        # 扩展 hints — 仅在有值时注入
+        if self.sec_ch_ua_arch:
+            headers["sec-ch-ua-arch"] = self.sec_ch_ua_arch
+        if self.sec_ch_ua_bitness:
+            headers["sec-ch-ua-bitness"] = self.sec_ch_ua_bitness
+        if self.sec_ch_ua_full_version:
+            headers["sec-ch-ua-full-version"] = self.sec_ch_ua_full_version
+        if self.sec_ch_ua_platform_version:
+            headers["sec-ch-ua-platform-version"] = self.sec_ch_ua_platform_version
+        return headers
 
     # ---- 页面导航请求 headers（GET HTML 页面）----
 
@@ -137,10 +152,13 @@ def get_random_profile() -> BrowserProfile:
         f"AppleWebKit/537.36 (KHTML, like Gecko) "
         f"Chrome/{full_ver} Safari/537.36"
     )
+    platform_ver = f'"{random.randint(10, 15)}.0.0"'
     return BrowserProfile(
         impersonate=cfg["impersonate"],
         major=major,
         full_version=full_ver,
         user_agent=ua,
         sec_ch_ua=cfg["sec_ch_ua"],
+        sec_ch_ua_full_version=f'"{full_ver}"',
+        sec_ch_ua_platform_version=platform_ver,
     )

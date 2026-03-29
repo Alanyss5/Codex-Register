@@ -14,7 +14,7 @@ from curl_cffi.requests import Session, Response
 
 from ..config.constants import ERROR_MESSAGES
 from ..config.settings import get_settings
-from .openai.sentinel import SentinelPOWError, build_sentinel_pow_token
+from .openai.sentinel import SentinelPOWError, SentinelTokenGenerator
 from .openai.browser_profile import BrowserProfile, get_random_profile
 
 
@@ -269,13 +269,12 @@ class OpenAIHTTPClient(HTTPClient):
             "Accept-Language": "en-US,en;q=0.9",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
-            "sec-ch-ua": self.profile.sec_ch_ua,
-            "sec-ch-ua-mobile": self.profile.sec_ch_ua_mobile,
-            "sec-ch-ua-platform": self.profile.sec_ch_ua_platform,
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
         }
+        # 从 profile 合并全部 sec-ch-ua 头部（含扩展 hints）
+        self.default_headers.update(self.profile._ch_ua_headers())
 
     def check_ip_location(self) -> Tuple[bool, Optional[str]]:
         """
@@ -363,21 +362,28 @@ class OpenAIHTTPClient(HTTPClient):
 
     def check_sentinel(self, did: str, proxies: Optional[Dict] = None) -> Optional[str]:
         """
-        检查 Sentinel 拦截
+        两步制 Sentinel PoW 协议：
+          Step 1: 发送 requirements_token → 获取服务端挑战 (seed + difficulty)
+          Step 2: 用 FNV-1a 求解 → 组装最终 sentinel header JSON
 
         Args:
             did: Device ID
             proxies: 代理配置
 
         Returns:
-            Sentinel token 或 None
+            组装好的 sentinel header JSON 字符串，或 None
         """
         from ..config.constants import OPENAI_API_ENDPOINTS
 
         try:
-            pow_token = build_sentinel_pow_token(self.profile.user_agent)
-            sen_req_body = json.dumps({
-                "p": pow_token,
+            generator = SentinelTokenGenerator(
+                device_id=did,
+                user_agent=self.profile.user_agent,
+            )
+
+            # Step 1: 发送 requirements token，获取服务端挑战
+            req_body = json.dumps({
+                "p": generator.generate_requirements_token(),
                 "id": did,
                 "flow": "authorize_continue",
             }, separators=(",", ":"))
@@ -385,14 +391,50 @@ class OpenAIHTTPClient(HTTPClient):
             response = self.post(
                 OPENAI_API_ENDPOINTS["sentinel"],
                 headers=self.profile.sentinel_headers(),
-                data=sen_req_body,
+                data=req_body,
             )
 
-            if response.status_code == 200:
-                return response.json().get("token")
-            else:
-                logger.warning(f"Sentinel 检查失败: {response.status_code}")
+            if response.status_code != 200:
+                logger.warning(f"Sentinel 挑战请求失败: {response.status_code}")
                 return None
+
+            challenge = response.json()
+            c_value = challenge.get("token", "")
+            if not c_value:
+                logger.warning("Sentinel 挑战响应缺少 token")
+                return None
+
+            # Step 2: 用服务端下发的 seed + difficulty 求解
+            pow_data = challenge.get("proofofwork") or {}
+            pow_required = pow_data.get("required", False)
+            pow_seed = pow_data.get("seed", "")
+            pow_difficulty = pow_data.get("difficulty", "0")
+
+            logger.info(
+                f"Sentinel 挑战: pow_required={pow_required}, "
+                f"seed={pow_seed[:16]}{'...' if len(pow_seed) > 16 else ''}, "
+                f"difficulty={pow_difficulty}, "
+                f"c_token_len={len(c_value)}"
+            )
+
+            if pow_required and pow_seed:
+                p_value = generator.generate_token(
+                    seed=pow_seed,
+                    difficulty=pow_difficulty,
+                )
+                logger.info(f"Sentinel PoW 求解完成: p_prefix={p_value[:15]}...")
+            else:
+                p_value = generator.generate_requirements_token()
+                logger.info("Sentinel 无需 PoW 求解，使用 requirements token")
+
+            # 组装最终 sentinel header
+            return json.dumps({
+                "p": p_value,
+                "t": "",
+                "c": c_value,
+                "id": did,
+                "flow": "authorize_continue",
+            }, separators=(",", ":"))
 
         except SentinelPOWError as e:
             logger.error(f"Sentinel POW 求解失败: {e}")

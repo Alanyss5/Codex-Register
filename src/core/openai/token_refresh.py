@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 
 from curl_cffi import requests as cffi_requests
 
+from .browser_profile import get_random_profile
+
 from ...config.settings import get_settings
 from ...database.session import get_db
 from ...database import crud
@@ -54,7 +56,8 @@ class TokenRefreshManager:
 
     def _create_session(self) -> cffi_requests.Session:
         """创建 HTTP 会话"""
-        session = cffi_requests.Session(impersonate="chrome120", proxy=self.proxy_url)
+        self._profile = get_random_profile()
+        session = cffi_requests.Session(impersonate=self._profile.impersonate, proxy=self.proxy_url)
         return session
 
     def refresh_by_session_token(self, session_token: str) -> TokenRefreshResult:
@@ -85,7 +88,7 @@ class TokenRefreshManager:
                 self.SESSION_URL,
                 headers={
                     "accept": "application/json",
-                    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                    "user-agent": self._profile.user_agent
                 },
                 timeout=30
             )

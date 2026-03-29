@@ -46,7 +46,7 @@ class ExternalExecutionOptions(BaseModel):
 class ExternalBatchCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    count: int = Field(..., ge=1, le=100)
+    count: int = Field(..., ge=1)
     idempotency_key: Optional[str] = None
     email: ExternalEmailSelection
     upload: ExternalUploadSelection = Field(default_factory=ExternalUploadSelection)

@@ -299,26 +299,20 @@ class TempMailService(BaseEmailService):
     def _make_request(self, method: str, path: str, **kwargs) -> Any:
         """
         发送请求并返回 JSON 数据
-
-        Args:
-            method: HTTP 方法
-            path: 请求路径（以 / 开头）
-            **kwargs: 传递给 http_client.request 的额外参数
-
-        Returns:
-            响应 JSON 数据
-
-        Raises:
-            EmailServiceError: 请求失败
         """
         base_url = self.config["base_url"].rstrip("/")
         url = f"{base_url}{path}"
 
-        # 合并默认 admin headers
         kwargs.setdefault("headers", {})
         for k, v in self._admin_headers().items():
             kwargs["headers"].setdefault(k, v)
 
+        # 强制限制超时时间和重试次数，防止用户的烂 Worker 把全站拖垮（包括查询域名、刷新邮箱、获取验证码等）
+        old_timeout = self.http_client.config.timeout
+        old_retries = self.http_client.config.max_retries
+        self.http_client.config.timeout = 3
+        self.http_client.config.max_retries = 1
+        
         try:
             response = self.http_client.request(method, url, **kwargs)
 
@@ -342,6 +336,9 @@ class TempMailService(BaseEmailService):
             if isinstance(e, EmailServiceError):
                 raise
             raise EmailServiceError(f"请求失败: {method} {path} - {e}")
+        finally:
+            self.http_client.config.timeout = old_timeout
+            self.http_client.config.max_retries = old_retries
 
     def create_email(self, config: Dict[str, Any] = None) -> Dict[str, Any]:
         """
@@ -710,11 +707,18 @@ class TempMailService(BaseEmailService):
 
     def check_health(self) -> bool:
         """检查服务健康状态"""
+        # 临时缩短超时时间并关闭重试，避免失效的Worker域名导致同步请求阻塞前端UI长达数十秒
+        old_timeout = self.http_client.config.timeout
+        old_retries = self.http_client.config.max_retries
+        self.http_client.config.timeout = 5
+        self.http_client.config.max_retries = 1
+        
         try:
             self._make_request(
                 "GET",
                 "/admin/mails",
                 params={"limit": 1, "offset": 0},
+                timeout=5,
             )
             self.update_status(True)
             return True
@@ -722,3 +726,6 @@ class TempMailService(BaseEmailService):
             logger.warning(f"TempMail 健康检查失败: {e}")
             self.update_status(False, e)
             return False
+        finally:
+            self.http_client.config.timeout = old_timeout
+            self.http_client.config.max_retries = old_retries
