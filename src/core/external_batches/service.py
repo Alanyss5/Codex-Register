@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ...database import crud, external_batch_crud
 from ...database.models import Account, ExternalRegistrationBatchItem, RegistrationTask
+from ..registration_engines import normalize_registration_engine
 from ..registration_upload import upload_registered_account
 from ..service_selection import UploadTarget, build_email_item_assignments, resolve_upload_target
 
@@ -45,6 +46,7 @@ class ExternalBatchCreateRequest(BaseModel):
     concurrency: int = 1
     interval_min: int = 5
     interval_max: int = 30
+    engine: str = 'protocol'
 
 
 class ExternalBatchService:
@@ -256,6 +258,7 @@ class ExternalBatchService:
             request_payload = batch.request_payload or {}
             mode = request_payload.get('mode', 'pipeline')
             concurrency = int(request_payload.get('concurrency', 1) or 1)
+            registration_engine_name = normalize_registration_engine(request_payload.get('engine', 'protocol'))
             items = external_batch_crud.list_batch_items(db, batch_uuid)
             email_service_type = batch.email_service_type
 
@@ -305,6 +308,7 @@ class ExternalBatchService:
                 [],
                 False,
                 [],
+                registration_engine_name=registration_engine_name,
             )
 
             with get_db() as db:
@@ -398,6 +402,7 @@ def _request_from_payload(payload: dict) -> ExternalBatchCreateRequest:
         concurrency=execution.get('concurrency', 1),
         interval_min=execution.get('interval_min', 5),
         interval_max=execution.get('interval_max', 30),
+        engine=normalize_registration_engine(execution.get('engine', 'protocol')),
     )
 
 
