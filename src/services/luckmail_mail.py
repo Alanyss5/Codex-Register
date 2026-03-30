@@ -84,7 +84,9 @@ class LuckMailService(BaseEmailService):
             "poll_interval": 3.0,
             "code_reuse_ttl": 600,
         }
-        self.config = {**default_config, **(config or {})}
+        raw_config = config or {}
+        self.config = {**default_config, **raw_config}
+        self._reuse_existing_purchases_explicit = "reuse_existing_purchases" in raw_config
 
         self.config["base_url"] = str(self.config.get("base_url") or "").strip()
         if not self.config["base_url"]:
@@ -663,6 +665,95 @@ class LuckMailService(BaseEmailService):
             "source": source,
         }
 
+    def _should_reuse_existing_purchases(self, request_config: Dict[str, Any], project_code: str) -> bool:
+        if "reuse_existing_purchases" in request_config:
+            return bool(request_config.get("reuse_existing_purchases"))
+        if (
+            str(project_code or "").strip().lower() in {"openai", "chatgpt"}
+            and not self._reuse_existing_purchases_explicit
+        ):
+            return False
+        return bool(self.config.get("reuse_existing_purchases", True))
+
+    def _list_token_mails(self, token: str) -> Optional[List[Any]]:
+        if not token:
+            return None
+        try:
+            mail_list = self.client.user.get_token_mails(token)
+        except AttributeError:
+            return None
+        except Exception as exc:
+            logger.warning(f"LuckMail 拉取 Token 邮件列表失败: token={token}, error={exc}")
+            return None
+        return list(getattr(mail_list, "mails", []) or [])
+
+    def _capture_purchase_mail_snapshot(self, order_info: Optional[Dict[str, Any]]) -> None:
+        if not order_info:
+            return
+        if self._normalize_inbox_mode(order_info.get("inbox_mode")) != "purchase":
+            return
+        token = str(order_info.get("token") or "").strip()
+        mails = self._list_token_mails(token)
+        snapshot = {
+            str(self._extract_field(mail, "message_id") or "").strip()
+            for mail in (mails or [])
+            if str(self._extract_field(mail, "message_id") or "").strip()
+        }
+        order_info["message_ids_snapshot"] = snapshot
+        order_info["message_ids_snapshot_trusted"] = mails is not None
+        order_info["mail_snapshot_taken_at"] = time.time()
+
+    def _extract_code_from_token_mails(
+        self,
+        token: str,
+        pattern: str,
+        known_message_ids: Optional[Set[str]] = None,
+        exclude_codes: Optional[Set[str]] = None,
+    ) -> tuple[Optional[str], Set[str], bool]:
+        mails = self._list_token_mails(token)
+        if mails is None:
+            return None, set(known_message_ids or ()), False
+
+        seen_message_ids = {str(mid) for mid in (known_message_ids or set()) if str(mid).strip()}
+        current_message_ids: Set[str] = set(seen_message_ids)
+        skipped_codes = {str(code).strip() for code in (exclude_codes or set()) if str(code).strip()}
+
+        for mail in mails:
+            message_id = str(self._extract_field(mail, "message_id") or "").strip()
+            if not message_id:
+                continue
+            current_message_ids.add(message_id)
+            if message_id in seen_message_ids:
+                continue
+
+            text = " ".join(
+                [
+                    str(self._extract_field(mail, "subject") or ""),
+                    str(self._extract_field(mail, "body", "body_text") or ""),
+                    str(self._extract_field(mail, "html_body", "body_html") or ""),
+                ]
+            )
+            code = self._extract_first_match(text, pattern)
+            if not code or code in skipped_codes:
+                continue
+            return code, current_message_ids, True
+
+        return None, current_message_ids, True
+
+    def _extract_first_match(self, value: str, pattern: Optional[str]) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        if pattern:
+            match = re.search(pattern, text)
+            if match:
+                return match.group(1) if match.groups() else match.group(0)
+            return ""
+        fallback = re.search(OTP_CODE_PATTERN, text)
+        if fallback:
+            return fallback.group(1) if fallback.groups() else fallback.group(0)
+        return ""
+
     def _pick_reusable_purchase_inbox(
         self,
         project_code: str,
@@ -870,7 +961,7 @@ class LuckMailService(BaseEmailService):
                 preferred_domain=preferred_domain,
             )
         else:
-            if bool(self.config.get("reuse_existing_purchases", True)):
+            if self._should_reuse_existing_purchases(request_config, project_code):
                 reused = self._pick_reusable_purchase_inbox(
                     project_code=project_code,
                     email_type=email_type,
@@ -891,6 +982,7 @@ class LuckMailService(BaseEmailService):
                     preferred_domain=preferred_domain,
                 )
 
+        self._capture_purchase_mail_snapshot(order_info)
         self._cache_order(order_info)
         self.update_status(True)
         return order_info
@@ -902,6 +994,7 @@ class LuckMailService(BaseEmailService):
         timeout: int = 120,
         pattern: str = OTP_CODE_PATTERN,
         otp_sent_at: Optional[float] = None,
+        exclude_codes: Optional[Set[str]] = None,
     ) -> Optional[str]:
         order_info = self._find_order(email=email, email_id=email_id)
 
@@ -922,20 +1015,27 @@ class LuckMailService(BaseEmailService):
 
         if inbox_mode == "purchase":
             if not token:
-                logger.warning(f"LuckMail 未找到 token，无法拉取验证码: email={email}, email_id={email_id}")
+                logger.warning(f"LuckMail ??? token????????: email={email}, email_id={email_id}")
                 return None
             code_key = f"token:{token}"
         else:
             if not order_no:
-                logger.warning(f"LuckMail 未找到订单号，无法拉取验证码: email={email}, email_id={email_id}")
+                logger.warning(f"LuckMail ??????????????: email={email}, email_id={email_id}")
                 return None
             code_key = f"order:{order_no}"
 
         poll_interval = float(self.config.get("poll_interval") or 3.0)
         timeout_s = max(int(timeout or 120), 1)
         deadline = time.time() + timeout_s
-        # OTP 刚发送后的短窗口内更容易读到旧码；配合“最近已用验证码”一起过滤。
         otp_guard_until = (float(otp_sent_at) + 1.5) if otp_sent_at else None
+        skipped_codes = {str(code).strip() for code in (exclude_codes or set()) if str(code).strip()}
+        known_message_ids = {
+            str(mid).strip()
+            for mid in ((order_info or {}).get("message_ids_snapshot") or set())
+            if str(mid).strip()
+        }
+        snapshot_trusted_default = False if order_info is None else True
+        snapshot_trusted = bool((order_info or {}).get("message_ids_snapshot_trusted", snapshot_trusted_default))
 
         while time.time() < deadline:
             try:
@@ -946,27 +1046,69 @@ class LuckMailService(BaseEmailService):
                     result = self.client.user.get_order_code(order_no)
                     status = str(self._extract_field(result, "status") or "").strip().lower()
             except Exception as exc:
-                logger.warning(f"LuckMail 拉取验证码失败: {exc}")
+                logger.warning(f"LuckMail ???????: {exc}")
                 self.update_status(False, exc)
                 time.sleep(min(poll_interval, 1.0))
                 continue
 
             code = str(self._extract_field(result, "verification_code") or "").strip()
+            code_source = "api"
 
-            # token 模式下，部分平台会在 has_new_mail=false 时也返回最近一次 code。
-            # 这里以 code 为准，再配合“最近已用验证码”过滤旧码。
-            if inbox_mode == "purchase" and code:
-                status = "success"
+            if inbox_mode == "purchase":
+                has_new_mail = bool(self._extract_field(result, "has_new_mail"))
+                if snapshot_trusted:
+                    mail_code, current_message_ids, mail_list_available = self._extract_code_from_token_mails(
+                        token,
+                        pattern,
+                        known_message_ids=known_message_ids,
+                        exclude_codes=skipped_codes,
+                    )
+                    if current_message_ids:
+                        known_message_ids = current_message_ids
+                        if order_info is not None:
+                            order_info["message_ids_snapshot"] = set(current_message_ids)
+                    if mail_code:
+                        code = mail_code
+                        code_source = "mail_list"
+                        status = "success"
+                    elif mail_list_available and has_new_mail and code:
+                        code_source = "api_fallback"
+                        status = "success"
+                    elif mail_list_available:
+                        code = ""
+                else:
+                    mails = self._list_token_mails(token)
+                    if mails is not None:
+                        current_message_ids = {
+                            str(self._extract_field(mail, "message_id") or "").strip()
+                            for mail in mails
+                            if str(self._extract_field(mail, "message_id") or "").strip()
+                        }
+                        known_message_ids = current_message_ids
+                        snapshot_trusted = True
+                        if order_info is not None:
+                            order_info["message_ids_snapshot"] = set(current_message_ids)
+                            order_info["message_ids_snapshot_trusted"] = True
+                    if has_new_mail and code:
+                        code_source = "api_fallback"
+                        status = "success"
+                    else:
+                        code = ""
 
             if status in ("timeout", "cancelled"):
                 ref = token if inbox_mode == "purchase" else order_no
-                logger.info(f"LuckMail 未拿到验证码: {ref}, status={status}")
+                logger.info(f"LuckMail ??????: {ref}, status={status}")
                 return None
 
             if status == "success" and code:
-                if pattern and not re.search(pattern, code):
-                    logger.warning(f"LuckMail 返回验证码格式不匹配: {code}")
-                    return None
+                validation_pattern = OTP_CODE_PATTERN if code_source == "mail_list" else (pattern or OTP_CODE_PATTERN)
+                if not re.search(validation_pattern, code):
+                    logger.warning(f"LuckMail ??????????: {code}")
+                    time.sleep(poll_interval)
+                    continue
+                if code in skipped_codes:
+                    time.sleep(poll_interval)
+                    continue
 
                 now_ts = time.time()
                 if otp_guard_until and now_ts < otp_guard_until and self._is_recent_code(code_key, code, now_ts):
@@ -974,7 +1116,6 @@ class LuckMailService(BaseEmailService):
                     continue
 
                 if self._is_recent_code(code_key, code, now_ts):
-                    # 同一 token/订单在不同流程阶段会复用查询接口，这里阻断旧码重复返回。
                     time.sleep(poll_interval)
                     continue
 
