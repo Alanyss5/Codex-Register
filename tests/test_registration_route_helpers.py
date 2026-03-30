@@ -11,7 +11,7 @@ def test_temp_mail_without_explicit_proxy_stays_direct(monkeypatch):
         unexpected_proxy_lookup,
     )
 
-    proxy_url, proxy_id, proxy_source = _resolve_proxy_for_service(
+    proxy_url, proxy_id, proxy_source, proxy_resolution = _resolve_proxy_for_service(
         db=None,
         service_type=EmailServiceType.TEMP_MAIL,
         explicit_proxy=None,
@@ -20,6 +20,7 @@ def test_temp_mail_without_explicit_proxy_stays_direct(monkeypatch):
     assert proxy_url is None
     assert proxy_id is None
     assert proxy_source == "direct"
+    assert proxy_resolution["source"] == "direct"
 
 
 def test_non_temp_mail_without_explicit_proxy_uses_auto_proxy(monkeypatch):
@@ -28,7 +29,7 @@ def test_non_temp_mail_without_explicit_proxy_uses_auto_proxy(monkeypatch):
         lambda _db: ("http://auto-proxy:8080", 7),
     )
 
-    proxy_url, proxy_id, proxy_source = _resolve_proxy_for_service(
+    proxy_url, proxy_id, proxy_source, proxy_resolution = _resolve_proxy_for_service(
         db=None,
         service_type=EmailServiceType.TEMPMAIL,
         explicit_proxy=None,
@@ -37,3 +38,4 @@ def test_non_temp_mail_without_explicit_proxy_uses_auto_proxy(monkeypatch):
     assert proxy_url == "http://auto-proxy:8080"
     assert proxy_id == 7
     assert proxy_source == "auto"
+    assert proxy_resolution["source"] == "auto"

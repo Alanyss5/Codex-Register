@@ -31,6 +31,7 @@ class ExternalUploadSelection(BaseModel):
 class ExternalExecutionOptions(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    engine: str = "protocol"
     mode: Literal["pipeline", "parallel"] = "pipeline"
     concurrency: int = Field(default=1, ge=1, le=50)
     interval_min: int = Field(default=5, ge=0)

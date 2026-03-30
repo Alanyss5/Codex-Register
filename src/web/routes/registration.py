@@ -17,6 +17,7 @@ from ...database import crud
 from ...database.session import get_db
 from ...database.models import RegistrationTask, Proxy
 from ...core.register import RegistrationEngine, RegistrationResult
+from ...core.registration_engines import create_registration_runner, normalize_registration_engine
 from ...services import EmailServiceFactory, EmailServiceType
 from ...config.settings import get_settings
 from ..task_manager import task_manager
@@ -84,7 +85,46 @@ def _build_consumed_outlook_error(email: Optional[str]) -> str:
 
 # ============== Proxy Helper Functions ==============
 
-def get_proxy_for_registration(db) -> Tuple[Optional[str], Optional[int]]:
+def _build_proxy_resolution_summary(
+    *,
+    source: str,
+    proxy_url: Optional[str],
+    previous_proxy_url: Optional[str] = None,
+) -> dict:
+    """Build a normalized proxy audit summary for explicit/pool/direct sources."""
+    from ...core.dynamic_proxy import ProxyResolutionResult, probe_proxy_exit
+
+    exit_ip = None
+    exit_country = None
+    error_message = ""
+
+    if proxy_url:
+        try:
+            exit_info = probe_proxy_exit(proxy_url)
+            exit_ip = exit_info.ip
+            exit_country = exit_info.country
+        except Exception as exc:
+            error_message = f"proxy exit probe failed: {exc}"
+            logger.warning("代理出口探测失败 source=%s proxy=%s error=%s", source, proxy_url, exc)
+
+    return ProxyResolutionResult(
+        source=source,
+        proxy_url=proxy_url,
+        requested_proxy_url=proxy_url,
+        exit_ip=exit_ip,
+        exit_country=exit_country,
+        expected_country=None,
+        matches_expected_country=True,
+        attempts=1 if proxy_url else 0,
+        reused_proxy=bool(previous_proxy_url and proxy_url and previous_proxy_url == proxy_url),
+        error_message=error_message,
+    ).summary()
+
+
+def get_proxy_for_registration(
+    db,
+    previous_proxy_url: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[int], Optional[dict]]:
     """
     获取用于注册的代理
 
@@ -94,36 +134,79 @@ def get_proxy_for_registration(db) -> Tuple[Optional[str], Optional[int]]:
     3. 否则使用系统设置中的静态默认代理
 
     Returns:
-        Tuple[proxy_url, proxy_id]: 代理 URL 和代理 ID（如果来自代理列表）
+        Tuple[proxy_url, proxy_id, proxy_resolution]: 代理 URL、代理 ID 和代理审计摘要
     """
     # 先尝试从代理列表中获取
     proxy = crud.get_random_proxy(db)
     if proxy:
-        return proxy.proxy_url, proxy.id
+        return (
+            proxy.proxy_url,
+            proxy.id,
+            _build_proxy_resolution_summary(
+                source="pool",
+                proxy_url=proxy.proxy_url,
+                previous_proxy_url=previous_proxy_url,
+            ),
+        )
 
     # 代理列表为空，尝试动态代理或静态代理
-    from ...core.dynamic_proxy import get_proxy_url_for_task
-    proxy_url = get_proxy_url_for_task()
-    if proxy_url:
-        return proxy_url, None
-
-    return None, None
+    from ...core.dynamic_proxy import get_proxy_resolution_for_task
+    proxy_result = get_proxy_resolution_for_task(previous_proxy_url=previous_proxy_url)
+    return proxy_result.proxy_url, None, proxy_result.summary()
 
 
 def _resolve_proxy_for_service(
     db,
     service_type: EmailServiceType,
     explicit_proxy: Optional[str],
-) -> Tuple[Optional[str], Optional[int], str]:
+    previous_proxy_url: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[int], str, Optional[dict]]:
     """Resolve the effective proxy for a registration task."""
     normalized_proxy = explicit_proxy.strip() if isinstance(explicit_proxy, str) else explicit_proxy
     if normalized_proxy:
-        return normalized_proxy, None, "explicit"
+        return (
+            normalized_proxy,
+            None,
+            "explicit",
+            _build_proxy_resolution_summary(
+                source="explicit",
+                proxy_url=normalized_proxy,
+                previous_proxy_url=previous_proxy_url,
+            ),
+        )
 
-    proxy_url, proxy_id = get_proxy_for_registration(db)
+    if service_type == EmailServiceType.TEMP_MAIL:
+        return None, None, "direct", _build_proxy_resolution_summary(
+            source="direct",
+            proxy_url=None,
+            previous_proxy_url=previous_proxy_url,
+        )
+
+    try:
+        proxy_lookup = get_proxy_for_registration(
+            db,
+            previous_proxy_url=previous_proxy_url,
+        )
+    except TypeError:
+        proxy_lookup = get_proxy_for_registration(db)
+
+    if len(proxy_lookup) == 2:
+        proxy_url, proxy_id = proxy_lookup
+        proxy_resolution = _build_proxy_resolution_summary(
+            source="auto" if proxy_url else "direct",
+            proxy_url=proxy_url,
+            previous_proxy_url=previous_proxy_url,
+        )
+    else:
+        proxy_url, proxy_id, proxy_resolution = proxy_lookup
+
     if proxy_url:
-        return proxy_url, proxy_id, "auto"
-    return None, None, "direct"
+        return proxy_url, proxy_id, "auto", proxy_resolution
+    return None, None, "direct", proxy_resolution or _build_proxy_resolution_summary(
+        source="direct",
+        proxy_url=None,
+        previous_proxy_url=previous_proxy_url,
+    )
 
 
 def update_proxy_usage(db, proxy_id: Optional[int]):
@@ -137,6 +220,7 @@ def update_proxy_usage(db, proxy_id: Optional[int]):
 class RegistrationTaskCreate(BaseModel):
     """创建注册任务请求"""
     email_service_type: str = "tempmail"
+    engine: str = "protocol"
     proxy: Optional[str] = None
     email_service_config: Optional[dict] = None
     email_service_id: Optional[int] = None
@@ -152,6 +236,7 @@ class BatchRegistrationRequest(BaseModel):
     """批量注册请求"""
     count: int = 1
     email_service_type: str = "tempmail"
+    engine: str = "protocol"
     proxy: Optional[str] = None
     email_service_config: Optional[dict] = None
     email_service_id: Optional[int] = None
@@ -221,6 +306,7 @@ class OutlookAccountsListResponse(BaseModel):
 class OutlookBatchRegistrationRequest(BaseModel):
     """Outlook 批量注册请求"""
     service_ids: List[int]
+    engine: str = "protocol"
     skip_registered: bool = True
     proxy: Optional[str] = None
     interval_min: int = 5
@@ -290,7 +376,7 @@ def _normalize_email_service_config(
     return normalized
 
 
-def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
+def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, registration_engine_name: str = "protocol"):
     """
     在线程池中执行的同步注册任务
 
@@ -324,9 +410,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
             service_type = EmailServiceType(email_service_type)
             settings = get_settings()
             actual_proxy_url: Optional[str] = None
+            proxy_resolution: Optional[dict] = None
             proxy_id = None
             proxy_source = "direct"
             effective_email_service_id = email_service_id if email_service_id is not None else task.email_service_id
+            previous_proxy_url = task.proxy if getattr(task, "proxy", None) else None
 
             # 优先使用数据库中配置的邮箱服务
             if effective_email_service_id is not None:
@@ -338,10 +426,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
 
                 if db_service:
                     service_type = EmailServiceType(db_service.service_type)
-                    actual_proxy_url, proxy_id, proxy_source = _resolve_proxy_for_service(
+                    actual_proxy_url, proxy_id, proxy_source, proxy_resolution = _resolve_proxy_for_service(
                         db=db,
                         service_type=service_type,
                         explicit_proxy=proxy,
+                        previous_proxy_url=previous_proxy_url,
                     )
                     config = _normalize_email_service_config(service_type, db_service.config, actual_proxy_url)
                     if service_type == EmailServiceType.OUTLOOK:
@@ -355,10 +444,11 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                     raise ValueError(f"邮箱服务不存在或已禁用: {effective_email_service_id}")
             else:
                 # ????????????
-                actual_proxy_url, proxy_id, proxy_source = _resolve_proxy_for_service(
+                actual_proxy_url, proxy_id, proxy_source, proxy_resolution = _resolve_proxy_for_service(
                     db=db,
                     service_type=service_type,
                     explicit_proxy=proxy,
+                    previous_proxy_url=previous_proxy_url,
                 )
                 if service_type == EmailServiceType.TEMPMAIL:
                     config = {
@@ -495,18 +585,32 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 logger.info(f"?? {task_uuid} ????[{proxy_source}]: {actual_proxy_url[:50]}...")
             else:
                 logger.info(f"?? {task_uuid} ??????? (source={proxy_source})")
+            if proxy_resolution:
+                logger.info(
+                    "任务 %s 代理审计 source=%s exit_ip=%s exit_country=%s expected_country=%s attempts=%s reused_proxy=%s error=%s",
+                    task_uuid,
+                    proxy_resolution.get("source") or proxy_source,
+                    proxy_resolution.get("exit_ip") or "-",
+                    proxy_resolution.get("exit_country") or "-",
+                    proxy_resolution.get("expected_country") or "-",
+                    proxy_resolution.get("attempts") or 0,
+                    proxy_resolution.get("reused_proxy"),
+                    proxy_resolution.get("error_message") or "-",
+                )
 
             email_service = EmailServiceFactory.create(service_type, config)
 
             # 创建注册引擎 - 使用 TaskManager 的日志回调
             log_callback = task_manager.create_log_callback(task_uuid, prefix=log_prefix, batch_id=batch_id)
 
-            engine = RegistrationEngine(
+            engine = create_registration_runner(
+                engine_name=registration_engine_name,
                 email_service=email_service,
                 proxy_url=actual_proxy_url,
                 proxy_source=proxy_source,
+                proxy_resolution=proxy_resolution,
                 callback_logger=log_callback,
-                task_uuid=task_uuid
+                task_uuid=task_uuid,
             )
 
             # 执行注册
@@ -647,7 +751,7 @@ def _run_sync_registration_task(task_uuid: str, email_service_type: str, proxy: 
                 pass
 
 
-async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None):
+async def run_registration_task(task_uuid: str, email_service_type: str, proxy: Optional[str], email_service_config: Optional[dict], email_service_id: Optional[int] = None, log_prefix: str = "", batch_id: str = "", auto_upload_cpa: bool = False, cpa_service_ids: List[int] = None, auto_upload_sub2api: bool = False, sub2api_service_ids: List[int] = None, auto_upload_tm: bool = False, tm_service_ids: List[int] = None, registration_engine_name: str = "protocol"):
     """
     异步执行注册任务
 
@@ -680,6 +784,7 @@ async def run_registration_task(task_uuid: str, email_service_type: str, proxy: 
             sub2api_service_ids or [],
             auto_upload_tm,
             tm_service_ids or [],
+            registration_engine_name,
         )
     except Exception as e:
         logger.error(f"线程池执行异常: {task_uuid}, 错误: {e}")
@@ -732,6 +837,7 @@ async def run_batch_parallel(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    registration_engine_name: str = "protocol",
 ):
     """
     并行模式：所有任务同时提交，Semaphore 控制最大并发数
@@ -751,6 +857,7 @@ async def run_batch_parallel(
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
                 auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
+                registration_engine_name=registration_engine_name,
             )
         with get_db() as db:
             t = crud.get_registration_task(db, uuid)
@@ -798,6 +905,7 @@ async def run_batch_pipeline(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    registration_engine_name: str = "protocol",
 ):
     """
     流水线模式：每隔 interval 秒启动一个新任务，Semaphore 限制最大并发数
@@ -817,6 +925,7 @@ async def run_batch_pipeline(
                 auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids or [],
                 auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids or [],
                 auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids or [],
+                registration_engine_name=registration_engine_name,
             )
             with get_db() as db:
                 t = crud.get_registration_task(db, uuid)
@@ -888,6 +997,7 @@ async def run_batch_registration(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    registration_engine_name: str = "protocol",
 ):
     """根据 mode 分发到并行或流水线执行"""
     if mode == "parallel":
@@ -897,6 +1007,7 @@ async def run_batch_registration(
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
             auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
+            registration_engine_name=registration_engine_name,
         )
     else:
         await run_batch_pipeline(
@@ -906,6 +1017,7 @@ async def run_batch_registration(
             auto_upload_cpa=auto_upload_cpa, cpa_service_ids=cpa_service_ids,
             auto_upload_sub2api=auto_upload_sub2api, sub2api_service_ids=sub2api_service_ids,
             auto_upload_tm=auto_upload_tm, tm_service_ids=tm_service_ids,
+            registration_engine_name=registration_engine_name,
         )
 
 
@@ -933,6 +1045,11 @@ async def start_registration(
         )
 
     # 创建任务
+    try:
+        request_engine = normalize_registration_engine(request.engine)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     task_uuid = str(uuid.uuid4())
 
     with get_db() as db:
@@ -958,6 +1075,7 @@ async def start_registration(
         request.sub2api_service_ids,
         request.auto_upload_tm,
         request.tm_service_ids,
+        registration_engine_name=request_engine,
     )
 
     return task_to_response(task)
@@ -988,6 +1106,11 @@ async def start_batch_registration(
             status_code=400,
             detail=f"无效的邮箱服务类型: {request.email_service_type}"
         )
+
+    try:
+        request_engine = normalize_registration_engine(request.engine)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if request.interval_min < 0 or request.interval_max < request.interval_min:
         raise HTTPException(status_code=400, detail="间隔时间参数无效")
@@ -1035,6 +1158,7 @@ async def start_batch_registration(
         request.sub2api_service_ids,
         request.auto_upload_tm,
         request.tm_service_ids,
+        registration_engine_name=request_engine,
     )
 
     return BatchRegistrationResponse(
@@ -1440,6 +1564,7 @@ async def run_outlook_batch_registration(
     sub2api_service_ids: List[int] = None,
     auto_upload_tm: bool = False,
     tm_service_ids: List[int] = None,
+    registration_engine_name: str = "protocol",
 ):
     """
     异步执行 Outlook 批量注册任务，复用通用并发逻辑
@@ -1483,6 +1608,7 @@ async def run_outlook_batch_registration(
         sub2api_service_ids=sub2api_service_ids,
         auto_upload_tm=auto_upload_tm,
         tm_service_ids=tm_service_ids,
+        registration_engine_name=registration_engine_name,
     )
 
 
@@ -1517,6 +1643,11 @@ async def start_outlook_batch_registration(
         raise HTTPException(status_code=400, detail="模式必须为 parallel 或 pipeline")
 
     # 过滤掉已注册的邮箱
+    try:
+        request_engine = normalize_registration_engine(request.engine)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     actual_service_ids = request.service_ids
     skipped_count = 0
 
@@ -1588,6 +1719,7 @@ async def start_outlook_batch_registration(
         request.sub2api_service_ids,
         request.auto_upload_tm,
         request.tm_service_ids,
+        registration_engine_name=request_engine,
     )
 
     return OutlookBatchRegistrationResponse(

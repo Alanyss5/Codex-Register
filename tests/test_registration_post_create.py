@@ -1,261 +1,247 @@
-from contextlib import contextmanager
+from types import SimpleNamespace
 
-from src.config.constants import OPENAI_API_ENDPOINTS, OPENAI_PAGE_TYPES
-from src.core.register import RegistrationEngine
-from src.core.registration_post_create import (
-    POST_CREATE_REENTERED_LOGIN_SOURCE,
-    POST_CREATE_RESUME_SOURCE,
-)
-from src.database.models import Account
-from tests.test_registration_engine import (
-    DummyResponse,
-    FakeEmailService,
-    FakeOpenAIClient,
-    FakeOAuthManagerWithWorkspace,
-    FakeOutlookEmailService,
-    QueueSession,
-    _make_engine_session_manager,
-    _response_with_did,
-    _workspace_cookie,
-)
+from src.config.constants import OPENAI_API_ENDPOINTS
 
 
-def test_run_prefers_locked_post_create_continue_over_cached_about_you():
-    def create_account_add_phone(session):
+class DummyResponse:
+    def __init__(self, status_code=200, payload=None, text="", headers=None, url="", on_return=None):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+        self.headers = headers or {}
+        self.url = url
+        self.on_return = on_return
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json payload")
+        return self._payload
+
+
+class CookieJar(dict):
+    jar = ()
+
+
+class QueueSession:
+    def __init__(self, steps):
+        self.steps = list(steps)
+        self.calls = []
+        self.cookies = CookieJar()
+
+    def get(self, url, **kwargs):
+        return self._request("GET", url, **kwargs)
+
+    def post(self, url, **kwargs):
+        return self._request("POST", url, **kwargs)
+
+    def _request(self, method, url, **kwargs):
+        self.calls.append({"method": method, "url": url, "kwargs": kwargs})
+        if not self.steps:
+            raise AssertionError(f"unexpected request: {method} {url}")
+        expected_method, expected_url, response = self.steps.pop(0)
+        assert method == expected_method
+        assert url == expected_url
+        if callable(response):
+            response = response(self)
+        if response.on_return:
+            response.on_return(self)
+        if not response.url:
+            response.url = url
+        return response
+
+
+class FakeProfile:
+    user_agent = "UA-test/1.0"
+    impersonate = "chrome136"
+
+    def _ch_ua_headers(self):
+        return {"sec-ch-ua": '"Chromium";v="136"', "sec-ch-ua-mobile": "?0", "sec-ch-ua-platform": '"Windows"'}
+
+    def sentinel_headers(self):
+        return {"content-type": "application/json"}
+
+
+class FakeHttpClient:
+    def __init__(self, session, sentinel_token="sentinel-token"):
+        self._session = session
+        self.profile = FakeProfile()
+        self.sentinel_token = sentinel_token
+
+    @property
+    def session(self):
+        return self._session
+
+    def check_sentinel(self, did, proxies=None):
+        return self.sentinel_token
+
+
+class FakeMailbox:
+    def __init__(self, code="123456"):
+        self.code = code
+        self.requests = []
+
+    def wait_for_verification_code(self, email, timeout=60, otp_sent_at=None, exclude_codes=None):
+        self.requests.append(
+            {
+                "email": email,
+                "timeout": timeout,
+                "otp_sent_at": otp_sent_at,
+                "exclude_codes": set(exclude_codes or ()),
+            }
+        )
+        return self.code
+
+
+def test_chatgpt_client_completes_source_style_registration_and_session_reuse():
+    from src.core.protocol_v2.client import ChatGPTProtocolClient
+
+    def mark_nextauth_cookie(session):
+        session.cookies["__Secure-next-auth.session-token"] = "nextauth-session"
         return DummyResponse(
             payload={
-                "page": {"type": "add_phone"},
-                "continue_url": "https://auth.example.test/add-phone",
+                "continue_url": "https://chatgpt.com/",
             },
             url=OPENAI_API_ENDPOINTS["create_account"],
         )
 
-    def consent_page_with_workspace(session):
-        session.cookies["oai-client-auth-session"] = _workspace_cookie("ws-post-create")
-        session.cookies["__Secure-next-auth.session-token"] = "session-post-create"
-        return DummyResponse(
-            status_code=200,
-            url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
-            text="<html><body>consent</body></html>",
-        )
-
-    session = QueueSession([
-        ("GET", "https://auth.example.test/flow/1", _response_with_did("did-1")),
-        (
-            "POST",
-            OPENAI_API_ENDPOINTS["signup"],
-            DummyResponse(payload={"page": {"type": OPENAI_PAGE_TYPES["PASSWORD_REGISTRATION"]}}),
-        ),
-        ("POST", OPENAI_API_ENDPOINTS["register"], DummyResponse(payload={})),
-        ("GET", OPENAI_API_ENDPOINTS["send_otp"], DummyResponse(payload={})),
-        (
-            "POST",
-            OPENAI_API_ENDPOINTS["validate_otp"],
-            DummyResponse(
-                payload={
-                    "page": {"type": OPENAI_PAGE_TYPES["EMAIL_OTP_VERIFICATION"]},
-                    "method": "GET",
-                    "continue_url": "https://auth.example.test/about-you",
-                }
+    session = QueueSession(
+        [
+            ("GET", "https://chatgpt.com/", DummyResponse(status_code=200, text="<html />", url="https://chatgpt.com/")),
+            ("GET", "https://chatgpt.com/api/auth/csrf", DummyResponse(payload={"csrfToken": "csrf-1"})),
+            (
+                "POST",
+                "https://chatgpt.com/api/auth/signin/openai",
+                DummyResponse(payload={"url": "https://auth.example.test/authorize"}),
             ),
-        ),
-        ("POST", OPENAI_API_ENDPOINTS["create_account"], create_account_add_phone),
-        (
-            "GET",
-            "https://auth.example.test/add-phone",
-            DummyResponse(
-                status_code=200,
-                url="https://auth.example.test/add-phone",
-                text=(
-                    "<html><body><script>"
-                    'window.__STATE__={"continue_url":"https://auth.openai.com/sign-in-with-chatgpt/codex/consent"};'
-                    "</script></body></html>"
-                ),
+            (
+                "GET",
+                "https://auth.example.test/authorize",
+                DummyResponse(status_code=200, url="https://auth.openai.com/u/signup/password"),
             ),
-        ),
-        ("GET", "https://auth.openai.com/sign-in-with-chatgpt/codex/consent", consent_page_with_workspace),
-        ("GET", "https://auth.openai.com/sign-in-with-chatgpt/codex/consent", consent_page_with_workspace),
-        (
-            "POST",
-            OPENAI_API_ENDPOINTS["select_workspace"],
-            DummyResponse(payload={"continue_url": "https://auth.example.test/post-create-continue"}),
-        ),
-        (
-            "GET",
-            "https://auth.example.test/post-create-continue",
-            DummyResponse(
-                status_code=302,
-                headers={"Location": "http://localhost:1455/auth/callback?code=code-post-create&state=state-1"},
+            ("POST", OPENAI_API_ENDPOINTS["register"], DummyResponse(payload={})),
+            ("GET", OPENAI_API_ENDPOINTS["send_otp"], DummyResponse(payload={})),
+            (
+                "POST",
+                OPENAI_API_ENDPOINTS["validate_otp"],
+                DummyResponse(payload={"continue_url": "https://auth.openai.com/about-you"}),
             ),
-        ),
-    ])
+            ("POST", OPENAI_API_ENDPOINTS["create_account"], mark_nextauth_cookie),
+            ("GET", "https://chatgpt.com/api/auth/session", DummyResponse(payload={
+                "accessToken": "access-1",
+                "sessionToken": "session-1",
+                "user": {"id": "user-1"},
+                "account": {"id": "acct-1"},
+                "authProvider": "nextauth",
+            })),
+        ]
+    )
 
-    email_service = FakeEmailService(["123456"])
-    engine = RegistrationEngine(email_service)
-    engine.http_client = FakeOpenAIClient([session], ["sentinel-1"])
-    engine.oauth_manager = FakeOAuthManagerWithWorkspace("ws-post-create")
+    client = ChatGPTProtocolClient(http_client=FakeHttpClient(session), callback_logger=None)
+    mailbox = FakeMailbox()
 
-    result = engine.run()
+    ok, message = client.register_complete_flow(
+        email="tester@example.com",
+        password="Passw0rd!123",
+        first_name="Test",
+        last_name="User",
+        birthdate="1990-01-02",
+        mailbox_client=mailbox,
+    )
 
-    assert result.success is True
-    assert result.workspace_id == "ws-post-create"
-    assert result.session_token == "session-post-create"
-    assert result.metadata["token_acquired_via_relogin"] is False
-    assert result.metadata["last_oauth_resume_source"] == POST_CREATE_RESUME_SOURCE
-    assert any("post_create_continue_overrode_cached_resume" in log for log in engine.logs)
-    assert any("post_create_continue_followed" in log for log in engine.logs)
-    assert any(call["url"] == "https://auth.example.test/add-phone" for call in session.calls)
-    assert len([call for call in session.calls if call["url"] == OPENAI_API_ENDPOINTS["validate_otp"]]) == 1
+    assert ok is True
+    assert message == "注册成功"
+    session_ok, tokens = client.reuse_session_and_get_tokens()
+    assert session_ok is True
+    assert tokens["access_token"] == "access-1"
+    assert tokens["session_token"] == "session-1"
+    assert tokens["account_id"] == "acct-1"
+    assert tokens["workspace_id"] == "acct-1"
+    assert mailbox.requests[0]["email"] == "tester@example.com"
 
 
-def test_run_can_complete_post_create_direct_consent_without_relogin():
-    def create_account_direct_consent(session):
-        return DummyResponse(
-            payload={
-                "page": {"type": "consent"},
-                "continue_url": "https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
-            },
-            url=OPENAI_API_ENDPOINTS["create_account"],
-        )
+def test_chatgpt_client_falls_back_to_password_flow_for_unknown_start_state():
+    from src.core.protocol_v2.client import ChatGPTProtocolClient
 
-    def consent_page_with_workspace(session):
-        session.cookies["oai-client-auth-session"] = _workspace_cookie("ws-post-create-consent")
-        session.cookies["__Secure-next-auth.session-token"] = "session-post-create-consent"
-        return DummyResponse(
-            status_code=200,
-            url="https://auth.openai.com/sign-in-with-chatgpt/codex/consent",
-            text="<html><body>consent</body></html>",
-        )
+    def mark_nextauth_cookie(session):
+        session.cookies["__Secure-next-auth.session-token"] = "nextauth-session"
+        return DummyResponse(payload={"continue_url": "https://chatgpt.com/"}, url=OPENAI_API_ENDPOINTS["create_account"])
 
-    session = QueueSession([
-        ("GET", "https://auth.example.test/flow/1", _response_with_did("did-1")),
-        (
-            "POST",
-            OPENAI_API_ENDPOINTS["signup"],
-            DummyResponse(payload={"page": {"type": OPENAI_PAGE_TYPES["PASSWORD_REGISTRATION"]}}),
-        ),
-        ("POST", OPENAI_API_ENDPOINTS["register"], DummyResponse(payload={})),
-        ("GET", OPENAI_API_ENDPOINTS["send_otp"], DummyResponse(payload={})),
-        ("POST", OPENAI_API_ENDPOINTS["validate_otp"], DummyResponse(payload={})),
-        ("POST", OPENAI_API_ENDPOINTS["create_account"], create_account_direct_consent),
-        ("GET", "https://auth.openai.com/sign-in-with-chatgpt/codex/consent", consent_page_with_workspace),
-        (
-            "POST",
-            OPENAI_API_ENDPOINTS["select_workspace"],
-            DummyResponse(payload={"continue_url": "https://auth.example.test/post-create-consent-continue"}),
-        ),
-        (
-            "GET",
-            "https://auth.example.test/post-create-consent-continue",
-            DummyResponse(
-                status_code=302,
-                headers={"Location": "http://localhost:1455/auth/callback?code=code-post-create-consent&state=state-1"},
+    session = QueueSession(
+        [
+            ("GET", "https://chatgpt.com/", DummyResponse(status_code=200, text="<html />", url="https://chatgpt.com/")),
+            ("GET", "https://chatgpt.com/api/auth/csrf", DummyResponse(payload={"csrfToken": "csrf-1"})),
+            (
+                "POST",
+                "https://chatgpt.com/api/auth/signin/openai",
+                DummyResponse(payload={"url": "https://auth.example.test/authorize"}),
             ),
-        ),
-    ])
-
-    email_service = FakeEmailService(["123456"])
-    engine = RegistrationEngine(email_service)
-    engine.http_client = FakeOpenAIClient([session], ["sentinel-1"])
-    engine.oauth_manager = FakeOAuthManagerWithWorkspace("ws-post-create-consent")
-
-    result = engine.run()
-
-    assert result.success is True
-    assert result.workspace_id == "ws-post-create-consent"
-    assert result.metadata["token_acquired_via_relogin"] is False
-    assert result.metadata["last_oauth_resume_source"] == POST_CREATE_RESUME_SOURCE
-    assert len([call for call in session.calls if call["url"] == OPENAI_API_ENDPOINTS["validate_otp"]]) == 1
-
-
-def test_run_fails_post_create_reentry_without_relogin_and_persists_recovery(monkeypatch):
-    manager = _make_engine_session_manager("post-create-reentered-login.db")
-
-    @contextmanager
-    def fake_get_db():
-        session = manager.SessionLocal()
-        try:
-            yield session
-        finally:
-            session.close()
-
-    monkeypatch.setattr("src.core.register.get_db", fake_get_db)
-
-    def create_account_add_phone(session):
-        return DummyResponse(
-            payload={
-                "page": {"type": "add_phone"},
-                "continue_url": "https://auth.example.test/add-phone",
-            },
-            url=OPENAI_API_ENDPOINTS["create_account"],
-        )
-
-    session = QueueSession([
-        ("GET", "https://auth.example.test/flow/1", _response_with_did("did-1")),
-        (
-            "POST",
-            OPENAI_API_ENDPOINTS["signup"],
-            DummyResponse(payload={"page": {"type": OPENAI_PAGE_TYPES["PASSWORD_REGISTRATION"]}}),
-        ),
-        ("POST", OPENAI_API_ENDPOINTS["register"], DummyResponse(payload={})),
-        ("GET", OPENAI_API_ENDPOINTS["send_otp"], DummyResponse(payload={})),
-        (
-            "POST",
-            OPENAI_API_ENDPOINTS["validate_otp"],
-            DummyResponse(
-                payload={
-                    "page": {"type": OPENAI_PAGE_TYPES["EMAIL_OTP_VERIFICATION"]},
-                    "method": "GET",
-                    "continue_url": "https://auth.example.test/about-you",
-                }
+            (
+                "GET",
+                "https://auth.example.test/authorize",
+                DummyResponse(status_code=200, url="https://auth.openai.com/u/flow/unknown"),
             ),
-        ),
-        ("POST", OPENAI_API_ENDPOINTS["create_account"], create_account_add_phone),
-        (
-            "GET",
-            "https://auth.example.test/add-phone",
-            DummyResponse(
-                status_code=302,
-                headers={"Location": "https://auth.example.test/log-in"},
+            ("POST", OPENAI_API_ENDPOINTS["register"], DummyResponse(payload={})),
+            ("GET", OPENAI_API_ENDPOINTS["send_otp"], DummyResponse(payload={})),
+            (
+                "POST",
+                OPENAI_API_ENDPOINTS["validate_otp"],
+                DummyResponse(payload={"continue_url": "https://auth.openai.com/about-you"}),
             ),
-        ),
-        (
-            "GET",
-            "https://auth.example.test/log-in",
-            DummyResponse(
-                status_code=200,
-                url="https://auth.example.test/log-in",
-                text="<html>login</html>",
-            ),
-        ),
-        (
-            "GET",
-            "https://auth.example.test/log-in",
-            DummyResponse(
-                status_code=200,
-                url="https://auth.example.test/log-in",
-                text="<html>login diagnostic</html>",
-            ),
-        ),
-    ])
+            ("POST", OPENAI_API_ENDPOINTS["create_account"], mark_nextauth_cookie),
+        ]
+    )
 
-    email_service = FakeOutlookEmailService(["123456"])
-    engine = RegistrationEngine(email_service)
-    engine.http_client = FakeOpenAIClient([session], ["sentinel-1"])
-    engine.oauth_manager = FakeOAuthManagerWithWorkspace("ws-unused")
+    client = ChatGPTProtocolClient(http_client=FakeHttpClient(session), callback_logger=None)
+    mailbox = FakeMailbox()
 
-    result = engine.run()
+    ok, message = client.register_complete_flow(
+        email="tester@example.com",
+        password="Passw0rd!123",
+        first_name="Test",
+        last_name="User",
+        birthdate="1990-01-02",
+        mailbox_client=mailbox,
+    )
 
-    assert result.success is False
-    assert result.error_message == "账号已创建，但 post-create 续跑重新进入登录页"
-    assert len([call for call in session.calls if call["url"] == OPENAI_API_ENDPOINTS["validate_otp"]]) == 1
-    assert len([call for call in session.calls if call["url"] == "https://auth.example.test/flow/2"]) == 0
-    assert any("post_create_continue_reentered_login" in log for log in engine.logs)
+    assert ok is True
+    assert message == "注册成功"
+    assert any(call["url"] == OPENAI_API_ENDPOINTS["register"] for call in session.calls)
 
-    with manager.session_scope() as session_db:
-        account = session_db.query(Account).filter(Account.email == "tester@example.com").first()
-        assert account is not None
-        assert account.status == "failed"
-        assert account.extra_data["last_recovery_error"] == result.error_message
-        assert account.extra_data["last_oauth_resume_source"] == POST_CREATE_REENTERED_LOGIN_SOURCE
-        assert account.extra_data["last_workspace_resolution_source"] == POST_CREATE_RESUME_SOURCE
+
+def test_chatgpt_client_requires_nextauth_cookie_before_session_reuse():
+    from src.core.protocol_v2.client import ChatGPTProtocolClient
+    from src.core.protocol_v2.flow import FlowState
+
+    session = QueueSession([])
+    client = ChatGPTProtocolClient(http_client=FakeHttpClient(session), callback_logger=None)
+    client.last_registration_state = FlowState(page_type="chatgpt_home", current_url="https://chatgpt.com/")
+
+    ok, error = client.reuse_session_and_get_tokens()
+
+    assert ok is False
+    assert "next-auth.session-token" in error
+
+
+def test_chatgpt_client_authorize_retries_after_transient_failure():
+    from src.core.protocol_v2.client import ChatGPTProtocolClient
+
+    attempts = {"count": 0}
+
+    def flaky_authorize(_session):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise RuntimeError("temporary tls failure")
+        return DummyResponse(status_code=200, url="https://auth.openai.com/u/signup/password")
+
+    session = QueueSession(
+        [
+            ("GET", "https://auth.example.test/authorize", flaky_authorize),
+            ("GET", "https://auth.example.test/authorize", flaky_authorize),
+        ]
+    )
+    client = ChatGPTProtocolClient(http_client=FakeHttpClient(session), callback_logger=None)
+
+    final_url = client.authorize("https://auth.example.test/authorize", max_retries=2)
+
+    assert final_url == "https://auth.openai.com/u/signup/password"
+    assert attempts["count"] == 2

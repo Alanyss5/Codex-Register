@@ -19,6 +19,7 @@ from curl_cffi import requests as cffi_requests
 
 from .openai.oauth import OAuthManager, OAuthStart, _decode_jwt_segment, _jwt_claims_no_verify, generate_oauth_url_no_prompt
 from .http_client import OpenAIHTTPClient, HTTPClientError
+from .protocol_v2.engine import ProtocolRegistrationEngineV2
 from ..services import EmailServiceFactory, BaseEmailService, EmailServiceType
 from ..database import crud
 from ..database.session import get_db
@@ -4475,6 +4476,20 @@ class RegistrationEngine:
             return False
 
     def run(self) -> RegistrationResult:
+        protocol_engine = ProtocolRegistrationEngineV2(
+            email_service=self.email_service,
+            proxy_url=self.proxy_url,
+            proxy_source=self.proxy_source,
+            callback_logger=self.callback_logger,
+            task_uuid=self.task_uuid,
+        )
+        result = protocol_engine.run()
+        self.email = getattr(protocol_engine, "email", self.email)
+        self.password = getattr(protocol_engine, "password", self.password)
+        self.email_info = getattr(protocol_engine, "email_info", self.email_info)
+        self.logs = getattr(protocol_engine, "logs", self.logs) or self.logs
+        return result
+
         result = RegistrationResult(success=False, logs=self.logs)
 
         try:
