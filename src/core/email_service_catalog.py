@@ -12,7 +12,18 @@ from ..services.temp_mail_domain_provider import summarize_temp_mail_domains
 
 
 DomainFetcher = Callable[[], Any]
-_TEMP_MAIL_ORDER = ["outlook", "moe_mail", "temp_mail", "duck_mail", "freemail", "imap_mail"]
+_TEMP_MAIL_COMPAT_TYPES = {"temp_mail", "cloudmail"}
+_TEMP_MAIL_ORDER = [
+    "outlook",
+    "moe_mail",
+    "temp_mail",
+    "yyds_mail",
+    "cloudmail",
+    "luckmail",
+    "duck_mail",
+    "freemail",
+    "imap_mail",
+]
 
 
 def build_temp_mail_service_entry(
@@ -20,6 +31,7 @@ def build_temp_mail_service_entry(
     *,
     fetch_domains: Optional[DomainFetcher] = None,
     preview_limit: int = 3,
+    service_type: str = "temp_mail",
 ) -> Dict[str, Any]:
     """Build one temp_mail service item with safe domain summary."""
     config = getattr(service, "config", None) or {}
@@ -33,7 +45,7 @@ def build_temp_mail_service_entry(
     return {
         "id": getattr(service, "id", None),
         "name": getattr(service, "name", None),
-        "type": "temp_mail",
+        "type": service_type,
         "priority": getattr(service, "priority", 0),
         **summary,
     }
@@ -44,6 +56,7 @@ def build_temp_mail_catalog(
     *,
     fetch_domains_by_service: Optional[Callable[[Any], Optional[DomainFetcher]]] = None,
     preview_limit: int = 3,
+    service_type: str = "temp_mail",
 ) -> Dict[str, Any]:
     """Build a compact temp_mail catalog block for capabilities APIs."""
     entries = []
@@ -54,6 +67,7 @@ def build_temp_mail_catalog(
                 service,
                 fetch_domains=fetcher,
                 preview_limit=preview_limit,
+                service_type=service_type,
             )
         )
 
@@ -83,6 +97,24 @@ def _generic_email_service_entry(service: Any) -> Dict[str, Any]:
         "name": getattr(service, "name", None),
         "type": getattr(service, "service_type", None),
         "priority": getattr(service, "priority", 0),
+    }
+
+
+def _yyds_mail_service_entry(service: Any) -> Dict[str, Any]:
+    config = getattr(service, "config", None) or {}
+    return {
+        **_generic_email_service_entry(service),
+        "default_domain": config.get("default_domain") or config.get("domain"),
+    }
+
+
+def _luckmail_service_entry(service: Any) -> Dict[str, Any]:
+    config = getattr(service, "config", None) or {}
+    return {
+        **_generic_email_service_entry(service),
+        "project_code": config.get("project_code"),
+        "email_type": config.get("email_type"),
+        "preferred_domain": config.get("preferred_domain") or config.get("domain"),
     }
 
 
@@ -116,14 +148,35 @@ def build_external_capabilities() -> Dict[str, Any]:
 
         for service_type in [*ordered_types, *remaining_types]:
             services = grouped.get(service_type, [])
-            if service_type == "temp_mail":
+            if service_type in _TEMP_MAIL_COMPAT_TYPES:
                 email_types.append(
                     {
                         "type": service_type,
                         **build_temp_mail_catalog(
                             services,
                             fetch_domains_by_service=_safe_temp_mail_fetcher,
+                            service_type=service_type,
                         ),
+                    }
+                )
+            elif service_type == "yyds_mail":
+                entries = [_yyds_mail_service_entry(svc) for svc in services]
+                email_types.append(
+                    {
+                        "type": service_type,
+                        "available": len(entries) > 0,
+                        "count": len(entries),
+                        "services": entries,
+                    }
+                )
+            elif service_type == "luckmail":
+                entries = [_luckmail_service_entry(svc) for svc in services]
+                email_types.append(
+                    {
+                        "type": service_type,
+                        "available": len(entries) > 0,
+                        "count": len(entries),
+                        "services": entries,
                     }
                 )
             else:
