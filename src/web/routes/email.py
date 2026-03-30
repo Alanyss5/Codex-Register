@@ -15,6 +15,8 @@ from ...services import EmailServiceFactory, EmailServiceType
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_TEMP_MAIL_COMPAT_PROVIDER_TYPES = ("yyds_mail", "cloudmail", "luckmail")
+_SUPPORTED_SERVICE_TYPES = {item.value for item in EmailServiceType} | set(_TEMP_MAIL_COMPAT_PROVIDER_TYPES)
 
 
 # ============== Pydantic Models ==============
@@ -84,7 +86,7 @@ class OutlookBatchImportResponse(BaseModel):
 # ============== Helper Functions ==============
 
 # 敏感字段列表，返回响应时需要过滤
-SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token'}
+SENSITIVE_FIELDS = {'password', 'api_key', 'refresh_token', 'access_token', 'admin_token', 'admin_password', 'custom_auth'}
 
 def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
     """过滤敏感配置信息"""
@@ -104,6 +106,10 @@ def filter_sensitive_config(config: Dict[str, Any]) -> Dict[str, Any]:
         filtered['has_oauth'] = True
 
     return filtered
+
+
+def _should_keep_config_value(value: Any) -> bool:
+    return value is not None and value != ""
 
 
 def service_to_response(service: EmailServiceModel) -> EmailServiceResponse:
@@ -146,6 +152,9 @@ async def get_email_services_stats():
             'temp_mail_count': 0,
             'duck_mail_count': 0,
             'freemail_count': 0,
+            'yyds_mail_count': 0,
+            'cloudmail_count': 0,
+            'luckmail_count': 0,
             'imap_mail_count': 0,
             'tempmail_available': True,  # 临时邮箱始终可用
             'enabled_count': enabled_count
@@ -162,6 +171,12 @@ async def get_email_services_stats():
                 stats['duck_mail_count'] = count
             elif service_type == 'freemail':
                 stats['freemail_count'] = count
+            elif service_type == 'yyds_mail':
+                stats['yyds_mail_count'] = count
+            elif service_type == 'cloudmail':
+                stats['cloudmail_count'] = count
+            elif service_type == 'luckmail':
+                stats['luckmail_count'] = count
             elif service_type == 'imap_mail':
                 stats['imap_mail_count'] = count
 
@@ -170,25 +185,36 @@ async def get_email_services_stats():
 
 @router.get("/types")
 async def get_service_types():
-    """获取支持的邮箱服务类型"""
+    """?????????????????"""
     return {
         "types": [
             {
                 "value": "tempmail",
                 "label": "Tempmail.lol",
-                "description": "临时邮箱服务，无需配置",
+                "description": "?????????????????",
                 "config_fields": [
-                    {"name": "base_url", "label": "API 地址", "default": "https://api.tempmail.lol/v2", "required": False},
-                    {"name": "timeout", "label": "超时时间", "default": 30, "required": False},
+                    {"name": "base_url", "label": "API ???", "default": "https://api.tempmail.lol/v2", "required": False},
+                    {"name": "timeout", "label": "??????", "default": 30, "required": False},
+                ]
+            },
+            {
+                "value": "yyds_mail",
+                "label": "YYDS Mail",
+                "description": "YYDS Mail API ?????????",
+                "config_fields": [
+                    {"name": "base_url", "label": "API ???", "default": "https://maliapi.215.im/v1", "required": False},
+                    {"name": "api_key", "label": "API Key", "required": True, "secret": True},
+                    {"name": "default_domain", "label": "??????", "required": False},
+                    {"name": "timeout", "label": "??????", "default": 30, "required": False},
                 ]
             },
             {
                 "value": "outlook",
                 "label": "Outlook",
-                "description": "Outlook 邮箱，需要配置账户信息",
+                "description": "Outlook ?????????????????",
                 "config_fields": [
-                    {"name": "email", "label": "邮箱地址", "required": True},
-                    {"name": "password", "label": "密码", "required": True},
+                    {"name": "email", "label": "??????", "required": True},
+                    {"name": "password", "label": "???", "required": True},
                     {"name": "client_id", "label": "OAuth Client ID", "required": False},
                     {"name": "refresh_token", "label": "OAuth Refresh Token", "required": False},
                 ]
@@ -196,55 +222,79 @@ async def get_service_types():
             {
                 "value": "moe_mail",
                 "label": "MoeMail",
-                "description": "自定义域名邮箱服务",
+                "description": "??????????????",
                 "config_fields": [
-                    {"name": "base_url", "label": "API 地址", "required": True},
+                    {"name": "base_url", "label": "API ???", "required": True},
                     {"name": "api_key", "label": "API Key", "required": True},
-                    {"name": "default_domain", "label": "默认域名", "required": False},
+                    {"name": "default_domain", "label": "??????", "required": False},
                 ]
             },
             {
                 "value": "temp_mail",
-                "label": "Temp-Mail（自部署）",
-                "description": "自部署 Cloudflare Worker 临时邮箱，admin 模式管理",
+                "label": "Temp-Mail????????",
+                "description": "?????Cloudflare Worker ????????dmin ??????",
                 "config_fields": [
-                    {"name": "base_url", "label": "Worker 地址", "required": True, "placeholder": "https://mail.example.com"},
-                    {"name": "admin_password", "label": "Admin 密码", "required": True, "secret": True},
-                    {"name": "domain", "label": "邮箱域名", "required": True, "placeholder": "example.com"},
-                    {"name": "enable_prefix", "label": "启用前缀", "required": False, "default": False},
+                    {"name": "base_url", "label": "Worker ???", "required": True, "placeholder": "https://mail.example.com"},
+                    {"name": "admin_password", "label": "Admin ???", "required": True, "secret": True},
+                    {"name": "domain", "label": "??????", "required": True, "placeholder": "example.com"},
+                    {"name": "enable_prefix", "label": "??????", "required": False, "default": False},
+                ]
+            },
+            {
+                "value": "cloudmail",
+                "label": "CloudMail",
+                "description": "CloudMail?????Temp-Mail ???????????",
+                "config_fields": [
+                    {"name": "base_url", "label": "Worker ???", "required": True, "placeholder": "https://mail.example.com"},
+                    {"name": "admin_password", "label": "Admin ???", "required": True, "secret": True},
+                    {"name": "domain", "label": "??????", "required": True, "placeholder": "example.com"},
+                    {"name": "enable_prefix", "label": "??????", "required": False, "default": True},
                 ]
             },
             {
                 "value": "duck_mail",
                 "label": "DuckMail",
-                "description": "DuckMail 接口邮箱服务，支持 API Key 私有域名访问",
+                "description": "DuckMail ??????????????API Key ?????????",
                 "config_fields": [
-                    {"name": "base_url", "label": "API 地址", "required": True, "placeholder": "https://api.duckmail.sbs"},
-                    {"name": "default_domain", "label": "默认域名", "required": True, "placeholder": "duckmail.sbs"},
+                    {"name": "base_url", "label": "API ???", "required": True, "placeholder": "https://api.duckmail.sbs"},
+                    {"name": "default_domain", "label": "??????", "required": True, "placeholder": "duckmail.sbs"},
                     {"name": "api_key", "label": "API Key", "required": False, "secret": True},
-                    {"name": "password_length", "label": "随机密码长度", "required": False, "default": 12},
+                    {"name": "password_length", "label": "?????????", "required": False, "default": 12},
                 ]
             },
             {
                 "value": "freemail",
                 "label": "Freemail",
-                "description": "Freemail 自部署 Cloudflare Worker 临时邮箱服务",
+                "description": "Freemail ?????Cloudflare Worker ?????????",
                 "config_fields": [
-                    {"name": "base_url", "label": "API 地址", "required": True, "placeholder": "https://freemail.example.com"},
+                    {"name": "base_url", "label": "API ???", "required": True, "placeholder": "https://freemail.example.com"},
                     {"name": "admin_token", "label": "Admin Token", "required": True, "secret": True},
-                    {"name": "domain", "label": "邮箱域名", "required": False, "placeholder": "example.com"},
+                    {"name": "domain", "label": "??????", "required": False, "placeholder": "example.com"},
                 ]
             },
             {
                 "value": "imap_mail",
-                "label": "IMAP 邮箱",
-                "description": "标准 IMAP 协议邮箱（Gmail/QQ/163等），仅用于接收验证码，强制直连",
+                "label": "IMAP ???",
+                "description": "??? IMAP ????????mail/QQ/163????????????????????????",
                 "config_fields": [
-                    {"name": "host", "label": "IMAP 服务器", "required": True, "placeholder": "imap.gmail.com"},
-                    {"name": "port", "label": "端口", "required": False, "default": 993},
-                    {"name": "use_ssl", "label": "使用 SSL", "required": False, "default": True},
-                    {"name": "email", "label": "邮箱地址", "required": True},
-                    {"name": "password", "label": "密码/授权码", "required": True, "secret": True},
+                    {"name": "host", "label": "IMAP ?????", "required": True, "placeholder": "imap.gmail.com"},
+                    {"name": "port", "label": "???", "required": False, "default": 993},
+                    {"name": "use_ssl", "label": "??? SSL", "required": False, "default": True},
+                    {"name": "email", "label": "??????", "required": True},
+                    {"name": "password", "label": "???/?????", "required": True, "secret": True},
+                ]
+            },
+            {
+                "value": "luckmail",
+                "label": "LuckMail",
+                "description": "LuckMail ?????????",
+                "config_fields": [
+                    {"name": "base_url", "label": "??????", "required": False, "default": "https://mails.luckyous.com/"},
+                    {"name": "api_key", "label": "API Key", "required": True, "secret": True},
+                    {"name": "project_code", "label": "??????", "required": False, "default": "openai"},
+                    {"name": "email_type", "label": "??????", "required": False, "default": "ms_graph"},
+                    {"name": "preferred_domain", "label": "??????", "required": False, "placeholder": "outlook.com"},
+                    {"name": "poll_interval", "label": "??????(??", "required": False, "default": 3.0},
                 ]
             }
         ]
@@ -309,9 +359,7 @@ async def get_email_service_full(service_id: int):
 async def create_email_service(request: EmailServiceCreate):
     """创建邮箱服务配置"""
     # 验证服务类型
-    try:
-        EmailServiceType(request.service_type)
-    except ValueError:
+    if request.service_type not in _SUPPORTED_SERVICE_TYPES:
         raise HTTPException(status_code=400, detail=f"无效的服务类型: {request.service_type}")
 
     with get_db() as db:
@@ -350,7 +398,7 @@ async def update_email_service(service_id: int, request: EmailServiceUpdate):
             current_config = service.config or {}
             merged_config = {**current_config, **request.config}
             # 移除空值
-            merged_config = {k: v for k, v in merged_config.items() if v}
+            merged_config = {k: v for k, v in merged_config.items() if _should_keep_config_value(v)}
             update_data["config"] = merged_config
         if request.enabled is not None:
             update_data["enabled"] = request.enabled

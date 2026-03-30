@@ -30,14 +30,17 @@ class TaskStatus(str, Enum):
 
 
 class EmailServiceType(str, Enum):
-    """邮箱服务类型"""
+    """Email service types"""
     TEMPMAIL = "tempmail"
+    YYDS_MAIL = "yyds_mail"
     OUTLOOK = "outlook"
     MOE_MAIL = "moe_mail"
     TEMP_MAIL = "temp_mail"
     DUCK_MAIL = "duck_mail"
     FREEMAIL = "freemail"
     IMAP_MAIL = "imap_mail"
+    CLOUDMAIL = "cloudmail"
+    LUCKMAIL = "luckmail"
 
 
 # ============================================================================
@@ -105,6 +108,13 @@ EMAIL_SERVICE_DEFAULTS = {
         "timeout": 30,
         "max_retries": 3,
     },
+    "yyds_mail": {
+        "base_url": "https://maliapi.215.im/v1",
+        "api_key": "",
+        "default_domain": "",
+        "timeout": 30,
+        "max_retries": 3,
+    },
     "outlook": {
         "imap_server": "outlook.office365.com",
         "imap_port": 993,
@@ -138,6 +148,24 @@ EMAIL_SERVICE_DEFAULTS = {
         "use_ssl": True,
         "email": "",
         "password": "",
+        "timeout": 30,
+        "max_retries": 3,
+    },
+    "cloudmail": {
+        "base_url": "",
+        "admin_password": "",
+        "domain": "",
+        "enable_prefix": True,
+        "timeout": 30,
+        "max_retries": 3,
+    },
+    "luckmail": {
+        "base_url": "https://mails.luckyous.com/",
+        "api_key": "",
+        "project_code": "openai",
+        "email_type": "ms_graph",
+        "preferred_domain": "",
+        "poll_interval": 3.0,
         "timeout": 30,
         "max_retries": 3,
     }

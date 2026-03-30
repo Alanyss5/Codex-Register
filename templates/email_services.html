@@ -211,6 +211,9 @@
                             <option value="tempmail">TempMail（自部署 Cloudflare Worker）</option>
                             <option value="duckmail">DuckMail（DuckMail API）</option>
                             <option value="freemail">Freemail（自部署 Cloudflare Worker）</option>
+                            <option value="yyds">YYDS Mail（API Key + 默认域）</option>
+                            <option value="cloudmail">CloudMail（Temp-Mail 兼容 Worker）</option>
+                            <option value="luckmail">LuckMail（项目/类型/轮询）</option>
                             <option value="imap">标准 IMAP（Gmail/QQ/163等）</option>
                         </select>
                     </div>
@@ -302,15 +305,83 @@
                             <label for="custom-imap-email">邮箱地址</label>
                             <input type="email" id="custom-imap-email" name="imap_email" placeholder="your@gmail.com">
                         </div>
+                    <div class="form-group">
+                        <label for="custom-imap-password">密码 / 授权码</label>
+                        <input type="password" id="custom-imap-password" name="imap_password" placeholder="Gmail 需使用 App Password，QQ/163 需使用授权码">
+                    </div>
+                </div>
+                    <!-- YYDS Mail 字段 -->
+                    <div id="add-yyds-fields" style="display:none;">
                         <div class="form-group">
-                            <label for="custom-imap-password">密码 / 授权码</label>
-                            <input type="password" id="custom-imap-password" name="imap_password" placeholder="Gmail 需使用 App Password，QQ/163 需使用授权码">
+                            <label for="custom-yyds-base-url">API 地址</label>
+                            <input type="text" id="custom-yyds-base-url" name="yyds_base_url" placeholder="https://api.yyds.example">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-yyds-api-key">API Key</label>
+                            <input type="text" id="custom-yyds-api-key" name="yyds_api_key" placeholder="API Key">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-yyds-default-domain">默认域名</label>
+                            <input type="text" id="custom-yyds-default-domain" name="yyds_default_domain" placeholder="example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-yyds-timeout">请求超时（秒）</label>
+                            <input type="number" id="custom-yyds-timeout" name="yyds_timeout" min="10" max="120" value="30">
                         </div>
                     </div>
-                    <div class="form-row">
+                    <!-- CloudMail 字段 -->
+                    <div id="add-cloudmail-fields" style="display:none;">
                         <div class="form-group">
-                            <label for="custom-priority">优先级</label>
-                            <input type="number" id="custom-priority" name="priority" value="0" min="0">
+                            <label for="custom-cloud-base-url">Worker 地址</label>
+                            <input type="text" id="custom-cloud-base-url" name="cloud_base_url" placeholder="https://mail.example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-cloud-admin-password">Admin 密码</label>
+                            <input type="password" id="custom-cloud-admin-password" name="cloud_admin_password" placeholder="x-admin-auth 密码">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-cloud-domain">邮箱域名</label>
+                            <input type="text" id="custom-cloud-domain" name="cloud_domain" placeholder="example.com">
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="custom-cloud-enable-prefix" name="cloud_enable_prefix" checked>
+                                启用地址前缀
+                            </label>
+                        </div>
+                    </div>
+                    <!-- LuckMail 字段 -->
+                    <div id="add-luckmail-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="custom-luck-base-url">接口地址</label>
+                            <input type="text" id="custom-luck-base-url" name="luck_base_url" placeholder="https://mails.luckyous.com/">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-luck-api-key">API Key</label>
+                            <input type="text" id="custom-luck-api-key" name="luck_api_key" placeholder="LuckMail API Key">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-luck-project-code">项目编码</label>
+                            <input type="text" id="custom-luck-project-code" name="luck_project_code" placeholder="openai">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-luck-email-type">邮箱类型</label>
+                            <input type="text" id="custom-luck-email-type" name="luck_email_type" placeholder="ms_graph">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-luck-preferred-domain">首选域</label>
+                            <input type="text" id="custom-luck-preferred-domain" name="luck_preferred_domain" placeholder="outlook.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="custom-luck-poll-interval">轮询间隔（秒）</label>
+                            <input type="number" id="custom-luck-poll-interval" name="luck_poll_interval" min="1" step="0.5" value="3">
+                            <small style="color: var(--text-muted);">轮询邮件状态的频率</small>
+                        </div>
+                    </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="custom-priority">优先级</label>
+                        <input type="number" id="custom-priority" name="priority" value="0" min="0">
                         </div>
                         <div class="form-group">
                             <label>
@@ -439,10 +510,81 @@
                             <label for="edit-imap-email">邮箱地址</label>
                             <input type="email" id="edit-imap-email" name="imap_email" placeholder="your@gmail.com">
                         </div>
+                    <div class="form-group">
+                        <label for="edit-imap-password">密码 / 授权码</label>
+                        <input type="password" id="edit-imap-password" name="imap_password" placeholder="留空则保持原值不变">
+                        <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                    </div>
+                </div>
+                    <!-- YYDS Mail 字段 -->
+                    <div id="edit-yyds-fields" style="display:none;">
                         <div class="form-group">
-                            <label for="edit-imap-password">密码 / 授权码</label>
-                            <input type="password" id="edit-imap-password" name="imap_password" placeholder="留空则保持原值不变">
+                            <label for="edit-yyds-base-url">API 地址</label>
+                            <input type="text" id="edit-yyds-base-url" name="yyds_base_url" placeholder="https://api.yyds.example">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-yyds-api-key">API Key</label>
+                            <input type="text" id="edit-yyds-api-key" name="yyds_api_key" placeholder="留空则不修改">
                             <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-yyds-default-domain">默认域名</label>
+                            <input type="text" id="edit-yyds-default-domain" name="yyds_default_domain" placeholder="example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-yyds-timeout">请求超时（秒）</label>
+                            <input type="number" id="edit-yyds-timeout" name="yyds_timeout" min="10" max="120">
+                        </div>
+                    </div>
+                    <!-- CloudMail 字段 -->
+                    <div id="edit-cloudmail-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="edit-cloud-base-url">Worker 地址</label>
+                            <input type="text" id="edit-cloud-base-url" name="cloud_base_url" placeholder="https://mail.example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-cloud-admin-password">Admin 密码</label>
+                            <input type="password" id="edit-cloud-admin-password" name="cloud_admin_password" placeholder="留空则不修改">
+                            <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-cloud-domain">邮箱域名</label>
+                            <input type="text" id="edit-cloud-domain" name="cloud_domain" placeholder="example.com">
+                        </div>
+                        <div class="form-group">
+                            <label>
+                                <input type="checkbox" id="edit-cloud-enable-prefix" name="cloud_enable_prefix">
+                                启用地址前缀
+                            </label>
+                        </div>
+                    </div>
+                    <!-- LuckMail 字段 -->
+                    <div id="edit-luckmail-fields" style="display:none;">
+                        <div class="form-group">
+                            <label for="edit-luck-base-url">接口地址</label>
+                            <input type="text" id="edit-luck-base-url" name="luck_base_url" placeholder="https://mails.luckyous.com/">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-luck-api-key">API Key</label>
+                            <input type="text" id="edit-luck-api-key" name="luck_api_key" placeholder="留空则不修改">
+                            <small style="color: var(--text-muted);">留空则保持原值不变</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-luck-project-code">项目编码</label>
+                            <input type="text" id="edit-luck-project-code" name="luck_project_code" placeholder="openai">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-luck-email-type">邮箱类型</label>
+                            <input type="text" id="edit-luck-email-type" name="luck_email_type" placeholder="ms_graph">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-luck-preferred-domain">首选域</label>
+                            <input type="text" id="edit-luck-preferred-domain" name="luck_preferred_domain" placeholder="outlook.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="edit-luck-poll-interval">轮询间隔（秒）</label>
+                            <input type="number" id="edit-luck-poll-interval" name="luck_poll_interval" min="1" step="0.5">
+                            <small style="color: var(--text-muted);">轮询邮件状态的频率</small>
                         </div>
                     </div>
                     <div class="form-row">

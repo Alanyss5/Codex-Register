@@ -350,7 +350,7 @@ class TempMailService(BaseEmailService):
             - jwt: 用户级 JWT token
             - service_id: 同 email（用作标识）
         """
-        enable_prefix = False  # 强制禁用前缀，忽略数据库配置
+        enable_prefix = bool((config or {}).get("enable_prefix", self.config.get("enable_prefix", False)))
         name = generate_local_part(enable_prefix=enable_prefix)
         domains = resolve_temp_mail_domains(
             self.config,

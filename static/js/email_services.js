@@ -53,6 +53,9 @@ const elements = {
     addDuckmailFields: document.getElementById('add-duckmail-fields'),
     addFreemailFields: document.getElementById('add-freemail-fields'),
     addImapFields: document.getElementById('add-imap-fields'),
+    addYydsFields: document.getElementById('add-yyds-fields'),
+    addCloudmailFields: document.getElementById('add-cloudmail-fields'),
+    addLuckmailFields: document.getElementById('add-luckmail-fields'),
 
     // 编辑自定义域名模态框
     editCustomModal: document.getElementById('edit-custom-modal'),
@@ -64,6 +67,9 @@ const elements = {
     editDuckmailFields: document.getElementById('edit-duckmail-fields'),
     editFreemailFields: document.getElementById('edit-freemail-fields'),
     editImapFields: document.getElementById('edit-imap-fields'),
+    editYydsFields: document.getElementById('edit-yyds-fields'),
+    editCloudmailFields: document.getElementById('edit-cloudmail-fields'),
+    editLuckmailFields: document.getElementById('edit-luckmail-fields'),
     editCustomTypeBadge: document.getElementById('edit-custom-type-badge'),
     editCustomSubTypeHidden: document.getElementById('edit-custom-sub-type-hidden'),
 
@@ -79,7 +85,10 @@ const CUSTOM_SUBTYPE_LABELS = {
     tempmail: '📮 TempMail（自部署 Cloudflare Worker）',
     duckmail: '🦆 DuckMail（DuckMail API）',
     freemail: 'Freemail（自部署 Cloudflare Worker）',
-    imap: '📧 IMAP 邮箱（Gmail/QQ/163等）'
+    imap: '📧 IMAP 邮箱（Gmail/QQ/163等）',
+    yyds: '⭐ YYDS Mail（API Key + 默认域名）',
+    cloudmail: '☁️ CloudMail（Temp-Mail 兼容 Worker）',
+    luckmail: '🎲 LuckMail（项目、邮件类型、轮询）'
 };
 
 // 初始化
@@ -186,6 +195,9 @@ function switchAddSubType(subType) {
     elements.addDuckmailFields.style.display = subType === 'duckmail' ? '' : 'none';
     elements.addFreemailFields.style.display = subType === 'freemail' ? '' : 'none';
     elements.addImapFields.style.display = subType === 'imap' ? '' : 'none';
+    elements.addYydsFields.style.display = subType === 'yyds' ? '' : 'none';
+    elements.addCloudmailFields.style.display = subType === 'cloudmail' ? '' : 'none';
+    elements.addLuckmailFields.style.display = subType === 'luckmail' ? '' : 'none';
 }
 
 // 切换编辑表单子类型显示
@@ -196,6 +208,9 @@ function switchEditSubType(subType) {
     elements.editDuckmailFields.style.display = subType === 'duckmail' ? '' : 'none';
     elements.editFreemailFields.style.display = subType === 'freemail' ? '' : 'none';
     elements.editImapFields.style.display = subType === 'imap' ? '' : 'none';
+    elements.editYydsFields.style.display = subType === 'yyds' ? '' : 'none';
+    elements.editCloudmailFields.style.display = subType === 'cloudmail' ? '' : 'none';
+    elements.editLuckmailFields.style.display = subType === 'luckmail' ? '' : 'none';
     elements.editCustomTypeBadge.textContent = CUSTOM_SUBTYPE_LABELS[subType] || CUSTOM_SUBTYPE_LABELS.moemail;
 }
 
@@ -204,7 +219,14 @@ async function loadStats() {
     try {
         const data = await api.get('/email-services/stats');
         elements.outlookCount.textContent = data.outlook_count || 0;
-        elements.customCount.textContent = (data.custom_count || 0) + (data.temp_mail_count || 0) + (data.duck_mail_count || 0) + (data.freemail_count || 0) + (data.imap_mail_count || 0);
+        elements.customCount.textContent = (data.custom_count || 0)
+            + (data.temp_mail_count || 0)
+            + (data.duck_mail_count || 0)
+            + (data.freemail_count || 0)
+            + (data.imap_mail_count || 0)
+            + (data.yyds_mail_count || 0)
+            + (data.cloudmail_count || 0)
+            + (data.luckmail_count || 0);
         elements.tempmailStatus.textContent = data.tempmail_available ? '可用' : '不可用';
         elements.totalEnabled.textContent = data.enabled_count || 0;
     } catch (error) {
@@ -289,6 +311,15 @@ function getCustomServiceTypeBadge(subType) {
     if (subType === 'freemail') {
         return '<span class="status-badge" style="background-color:#9c27b0;color:white;">Freemail</span>';
     }
+    if (subType === 'yyds') {
+        return '<span class="status-badge info" style="background-color:#00897b;color:white;">YYDS Mail</span>';
+    }
+    if (subType === 'cloudmail') {
+        return '<span class="status-badge" style="background-color:#3b82f6;color:white;">CloudMail</span>';
+    }
+    if (subType === 'luckmail') {
+        return '<span class="status-badge" style="background-color:#6d28d9;color:white;">LuckMail</span>';
+    }
     return '<span class="status-badge" style="background-color:#0288d1;color:white;">IMAP</span>';
 }
 
@@ -298,31 +329,55 @@ function getCustomServiceAddress(service) {
         const emailAddr = service.config?.email || '';
         return `${escapeHtml(host)}<div style="color: var(--text-muted); margin-top: 4px;">${escapeHtml(emailAddr)}</div>`;
     }
-    const baseUrl = service.config?.base_url || '-';
-    const domain = service.config?.default_domain || service.config?.domain;
-    if (!domain) {
-        return escapeHtml(baseUrl);
+    const config = service.config || {};
+    const baseUrl = config.base_url || '-';
+    let extra = '';
+
+    if (service._subType === 'yyds') {
+        const domain = config.default_domain || config.domain || '未设置';
+        const timeout = config.timeout !== undefined ? config.timeout : '默认';
+        extra = `<div style="color: var(--text-muted); margin-top: 4px;">默认域：${escapeHtml(domain)} | 超时：${escapeHtml(timeout.toString())}s</div>`;
+    } else if (service._subType === 'cloudmail') {
+        const domain = config.domain || '未设置';
+        const enablePrefix = config.enable_prefix !== false;
+        extra = `<div style="color: var(--text-muted); margin-top: 4px;">域名：${escapeHtml(domain)} | 前缀：${enablePrefix ? '启用' : '关闭'}</div>`;
+    } else if (service._subType === 'luckmail') {
+        const project = config.project_code || 'default';
+        const emailType = config.email_type || '默认';
+        const preferred = config.preferred_domain || config.domain || '未设置';
+        const poll = config.poll_interval !== undefined ? config.poll_interval : '默认';
+        extra = `<div style="color: var(--text-muted); margin-top: 4px;">项目：${escapeHtml(project)} | 类型：${escapeHtml(emailType)} | 域：${escapeHtml(preferred)}</div>`;
+        extra += `<div style="color: var(--text-muted); margin-top: 2px;">轮询：${escapeHtml(poll.toString())}s</div>`;
+    } else {
+        const domain = config.default_domain || config.domain;
+        if (domain) {
+            extra = `<div style="color: var(--text-muted); margin-top: 4px;">默认域名：${escapeHtml(domain)}</div>`;
+        }
     }
-    return `${escapeHtml(baseUrl)}<div style="color: var(--text-muted); margin-top: 4px;">默认域名：@${escapeHtml(domain)}</div>`;
+
+    return `${escapeHtml(baseUrl)}${extra}`;
 }
 
 // 加载自定义邮箱服务（moe_mail + temp_mail + duck_mail + freemail 合并）
 async function loadCustomServices() {
     try {
-        const [r1, r2, r3, r4, r5] = await Promise.all([
-            api.get('/email-services?service_type=moe_mail'),
-            api.get('/email-services?service_type=temp_mail'),
-            api.get('/email-services?service_type=duck_mail'),
-            api.get('/email-services?service_type=freemail'),
-            api.get('/email-services?service_type=imap_mail')
-        ]);
-        customServices = [
-            ...(r1.services || []).map(s => ({ ...s, _subType: 'moemail' })),
-            ...(r2.services || []).map(s => ({ ...s, _subType: 'tempmail' })),
-            ...(r3.services || []).map(s => ({ ...s, _subType: 'duckmail' })),
-            ...(r4.services || []).map(s => ({ ...s, _subType: 'freemail' })),
-            ...(r5.services || []).map(s => ({ ...s, _subType: 'imap' }))
+        const serviceTypes = [
+            { key: 'moe_mail', subType: 'moemail' },
+            { key: 'temp_mail', subType: 'tempmail' },
+            { key: 'duck_mail', subType: 'duckmail' },
+            { key: 'freemail', subType: 'freemail' },
+            { key: 'imap_mail', subType: 'imap' },
+            { key: 'yyds_mail', subType: 'yyds' },
+            { key: 'cloudmail', subType: 'cloudmail' },
+            { key: 'luckmail', subType: 'luckmail' }
         ];
+        const responses = await Promise.all(serviceTypes.map(t => api.get(`/email-services?service_type=${t.key}`)));
+        customServices = responses.reduce((acc, res, idx) => {
+            const type = serviceTypes[idx];
+            const services = res?.services || [];
+            const mapped = services.map(service => ({ ...service, _subType: type.subType }));
+            return acc.concat(mapped);
+        }, []);
 
         if (customServices.length === 0) {
             elements.customTable.innerHTML = `
@@ -466,6 +521,34 @@ async function handleAddCustom(e) {
             admin_token: formData.get('fm_admin_token'),
             domain: formData.get('fm_domain')
         };
+    } else if (subType === 'yyds') {
+        serviceType = 'yyds_mail';
+        config = {
+            base_url: formData.get('yyds_base_url'),
+            api_key: formData.get('yyds_api_key'),
+            default_domain: formData.get('yyds_default_domain')
+        };
+        const timeout = parseInt(formData.get('yyds_timeout'), 10);
+        if (!Number.isNaN(timeout)) config.timeout = timeout;
+    } else if (subType === 'cloudmail') {
+        serviceType = 'cloudmail';
+        config = {
+            base_url: formData.get('cloud_base_url'),
+            admin_password: formData.get('cloud_admin_password'),
+            domain: formData.get('cloud_domain'),
+            enable_prefix: formData.get('cloud_enable_prefix') === 'on'
+        };
+    } else if (subType === 'luckmail') {
+        serviceType = 'luckmail';
+        config = {
+            base_url: formData.get('luck_base_url'),
+            api_key: formData.get('luck_api_key'),
+            project_code: formData.get('luck_project_code'),
+            email_type: formData.get('luck_email_type'),
+            preferred_domain: formData.get('luck_preferred_domain')
+        };
+        const poll = parseFloat(formData.get('luck_poll_interval'));
+        if (!Number.isNaN(poll)) config.poll_interval = poll;
     } else {
         serviceType = 'imap_mail';
         config = {
@@ -619,7 +702,13 @@ async function editCustomService(id, subType) {
                         ? 'freemail'
                         : service.service_type === 'imap_mail'
                             ? 'imap'
-                            : 'moemail'
+                            : service.service_type === 'yyds_mail'
+                                ? 'yyds'
+                                : service.service_type === 'cloudmail'
+                                    ? 'cloudmail'
+                                    : service.service_type === 'luckmail'
+                                        ? 'luckmail'
+                                        : 'moemail'
         );
 
         document.getElementById('edit-custom-id').value = service.id;
@@ -650,6 +739,26 @@ async function editCustomService(id, subType) {
             document.getElementById('edit-fm-admin-token').value = '';
             document.getElementById('edit-fm-admin-token').placeholder = service.config?.admin_token ? '已设置，留空保持不变' : '请输入 Admin Token';
             document.getElementById('edit-fm-domain').value = service.config?.domain || '';
+        } else if (resolvedSubType === 'yyds') {
+            document.getElementById('edit-yyds-base-url').value = service.config?.base_url || '';
+            document.getElementById('edit-yyds-api-key').value = '';
+            document.getElementById('edit-yyds-api-key').placeholder = service.config?.api_key ? '已设置，留空保持不变' : 'API Key';
+            document.getElementById('edit-yyds-default-domain').value = service.config?.default_domain || service.config?.domain || '';
+            document.getElementById('edit-yyds-timeout').value = service.config?.timeout || '';
+        } else if (resolvedSubType === 'cloudmail') {
+            document.getElementById('edit-cloud-base-url').value = service.config?.base_url || '';
+            document.getElementById('edit-cloud-admin-password').value = '';
+            document.getElementById('edit-cloud-admin-password').placeholder = service.config?.admin_password ? '已设置，留空保持不变' : '请输入 Admin 密码';
+            document.getElementById('edit-cloud-domain').value = service.config?.domain || '';
+            document.getElementById('edit-cloud-enable-prefix').checked = service.config?.enable_prefix !== false;
+        } else if (resolvedSubType === 'luckmail') {
+            document.getElementById('edit-luck-base-url').value = service.config?.base_url || '';
+            document.getElementById('edit-luck-api-key').value = '';
+            document.getElementById('edit-luck-api-key').placeholder = service.config?.api_key ? '已设置，留空保持不变' : 'API Key';
+            document.getElementById('edit-luck-project-code').value = service.config?.project_code || '';
+            document.getElementById('edit-luck-email-type').value = service.config?.email_type || '';
+            document.getElementById('edit-luck-preferred-domain').value = service.config?.preferred_domain || service.config?.domain || '';
+            document.getElementById('edit-luck-poll-interval').value = service.config?.poll_interval || '';
         } else {
             document.getElementById('edit-imap-host').value = service.config?.host || '';
             document.getElementById('edit-imap-port').value = service.config?.port || 993;
@@ -703,6 +812,34 @@ async function handleEditCustom(e) {
         };
         const token = formData.get('fm_admin_token');
         if (token && token.trim()) config.admin_token = token.trim();
+    } else if (subType === 'yyds') {
+        config = {
+            base_url: formData.get('yyds_base_url'),
+            default_domain: formData.get('yyds_default_domain')
+        };
+        const apiKey = formData.get('yyds_api_key');
+        if (apiKey && apiKey.trim()) config.api_key = apiKey.trim();
+        const timeout = parseInt(formData.get('yyds_timeout'), 10);
+        if (!Number.isNaN(timeout)) config.timeout = timeout;
+    } else if (subType === 'cloudmail') {
+        config = {
+            base_url: formData.get('cloud_base_url'),
+            domain: formData.get('cloud_domain'),
+            enable_prefix: formData.get('cloud_enable_prefix') === 'on'
+        };
+        const pwd = formData.get('cloud_admin_password');
+        if (pwd && pwd.trim()) config.admin_password = pwd.trim();
+    } else if (subType === 'luckmail') {
+        config = {
+            base_url: formData.get('luck_base_url'),
+            project_code: (formData.get('luck_project_code') || '').trim() || 'openai',
+            email_type: (formData.get('luck_email_type') || '').trim() || 'ms_graph',
+            preferred_domain: formData.get('luck_preferred_domain')
+        };
+        const apiKey = formData.get('luck_api_key');
+        if (apiKey && apiKey.trim()) config.api_key = apiKey.trim();
+        const poll = parseFloat(formData.get('luck_poll_interval'));
+        if (!Number.isNaN(poll)) config.poll_interval = poll;
     } else {
         config = {
             host: formData.get('imap_host'),

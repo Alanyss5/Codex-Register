@@ -24,7 +24,11 @@ let availableServices = {
     moe_mail: { available: false, services: [] },
     temp_mail: { available: false, services: [] },
     duck_mail: { available: false, services: [] },
-    freemail: { available: false, services: [] }
+    freemail: { available: false, services: [] },
+    imap_mail: { available: false, services: [] },
+    yyds_mail: { available: false, services: [] },
+    cloudmail: { available: false, services: [] },
+    luckmail: { available: false, services: [] }
 };
 
 // WebSocket 相关变量
@@ -372,6 +376,77 @@ function updateEmailServiceOptions() {
 
         select.appendChild(optgroup);
     }
+
+    // IMAP 邮箱
+    if (availableServices.imap_mail && availableServices.imap_mail.available) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `📨 IMAP 邮箱 (${availableServices.imap_mail.count} 个服务)`;
+
+        availableServices.imap_mail.services.forEach(service => {
+            const option = document.createElement('option');
+            option.value = `imap_mail:${service.id}`;
+            option.textContent = service.name + (service.email ? ` (${service.email})` : '');
+            option.dataset.type = 'imap_mail';
+            option.dataset.serviceId = service.id;
+            optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+    }
+
+    // YYDS Mail
+    if (availableServices.yyds_mail && availableServices.yyds_mail.available) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `⚡ YYDS Mail (${availableServices.yyds_mail.count} 个服务)`;
+
+        availableServices.yyds_mail.services.forEach(service => {
+            const option = document.createElement('option');
+            option.value = `yyds_mail:${service.id}`;
+            option.textContent = service.name + (service.default_domain ? ` (@${service.default_domain})` : '');
+            option.dataset.type = 'yyds_mail';
+            option.dataset.serviceId = service.id;
+            optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+    }
+
+    // Cloudmail
+    if (availableServices.cloudmail && availableServices.cloudmail.available) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `☁️ Cloudmail (${availableServices.cloudmail.count} 个服务)`;
+
+        availableServices.cloudmail.services.forEach(service => {
+            const option = document.createElement('option');
+            option.value = `cloudmail:${service.id}`;
+            const previewDomain = Array.isArray(service.domains_preview) && service.domains_preview.length > 0
+                ? service.domains_preview[0]
+                : '';
+            option.textContent = service.name + (previewDomain ? ` (@${previewDomain})` : '');
+            option.dataset.type = 'cloudmail';
+            option.dataset.serviceId = service.id;
+            optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+    }
+
+    // Luckmail
+    if (availableServices.luckmail && availableServices.luckmail.available) {
+        const optgroup = document.createElement('optgroup');
+        optgroup.label = `🍀 Luckmail (${availableServices.luckmail.count} 个服务)`;
+
+        availableServices.luckmail.services.forEach(service => {
+            const option = document.createElement('option');
+            option.value = `luckmail:${service.id}`;
+            option.textContent = service.name + (service.preferred_domain ? ` (@${service.preferred_domain})` : '');
+            option.dataset.type = 'luckmail';
+            option.dataset.serviceId = service.id;
+            optgroup.appendChild(option);
+        });
+
+        select.appendChild(optgroup);
+    }
 }
 
 // 处理邮箱服务切换
@@ -421,6 +496,26 @@ function handleServiceChange(e) {
         const service = availableServices.freemail.services.find(s => s.id == id);
         if (service) {
             addLog('info', `[系统] 已选择 Freemail 服务: ${service.name}`);
+        }
+    } else if (type === 'imap_mail') {
+        const service = availableServices.imap_mail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 IMAP 邮箱服务: ${service.name}`);
+        }
+    } else if (type === 'yyds_mail') {
+        const service = availableServices.yyds_mail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 YYDS Mail 服务: ${service.name}`);
+        }
+    } else if (type === 'cloudmail') {
+        const service = availableServices.cloudmail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 Cloudmail 服务: ${service.name}`);
+        }
+    } else if (type === 'luckmail') {
+        const service = availableServices.luckmail.services.find(s => s.id == id);
+        if (service) {
+            addLog('info', `[系统] 已选择 Luckmail 服务: ${service.name}`);
         }
     }
 }
