@@ -64,7 +64,26 @@ def test_builtin_luckmail_client_supports_auth_retry_and_token_noauth(monkeypatc
                 },
             },
         ),
-        _FakeResponse(200, {"code": 0, "message": "设置成功", "data": None}),
+        _FakeResponse(
+            200,
+            {
+                "code": 0,
+                "message": "success",
+                "data": {
+                    "email_address": "user@example.com",
+                    "project": "openai",
+                    "mails": [
+                        {
+                            "message_id": "msg_1",
+                            "subject": "Your code is 482910",
+                            "body": "Your code is 482910",
+                            "html_body": "<p>482910</p>",
+                        }
+                    ],
+                },
+            },
+        ),
+        _FakeResponse(200, {"code": 0, "message": "success", "data": None}),
     ]
 
     def fake_request(method, url, **kwargs):
@@ -75,11 +94,15 @@ def test_builtin_luckmail_client_supports_auth_retry_and_token_noauth(monkeypatc
 
     balance = client.user.get_balance()
     token_code = client.user.get_token_code("tok_demo")
+    token_mails = client.user.get_token_mails("tok_demo")
     client.user.set_purchase_disabled(12, 1)
 
     assert balance.balance == "12.5000"
     assert token_code.has_new_mail is True
     assert token_code.verification_code == "482910"
+    assert token_mails.email_address == "user@example.com"
+    assert len(token_mails.mails) == 1
+    assert token_mails.mails[0].message_id == "msg_1"
 
     assert calls[0][0] == "GET"
     assert calls[0][1].endswith("/api/v1/openapi/balance")
@@ -92,9 +115,13 @@ def test_builtin_luckmail_client_supports_auth_retry_and_token_noauth(monkeypatc
     assert calls[2][1].endswith("/api/v1/openapi/email/token/tok_demo/code")
     assert calls[2][2]["headers"] == {}
 
-    assert calls[3][0] == "PUT"
-    assert calls[3][1].endswith("/api/v1/openapi/email/purchases/12/disabled")
-    assert calls[3][2]["json"] == {"disabled": 1}
+    assert calls[3][0] == "GET"
+    assert calls[3][1].endswith("/api/v1/openapi/email/token/tok_demo/mails")
+    assert calls[3][2]["headers"] == {}
+
+    assert calls[4][0] == "PUT"
+    assert calls[4][1].endswith("/api/v1/openapi/email/purchases/12/disabled")
+    assert calls[4][2]["json"] == {"disabled": 1}
 
 
 def test_builtin_luckmail_client_wraps_paginated_lists(monkeypatch):

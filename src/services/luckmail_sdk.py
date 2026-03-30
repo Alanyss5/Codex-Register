@@ -73,6 +73,14 @@ class _LuckMailUserClient:
         )
         return _to_namespace(data or {})
 
+    def get_token_mails(self, token: str):
+        data = self._client._request_json(
+            "GET",
+            f"/email/token/{token}/mails",
+            require_auth=False,
+        )
+        return _to_namespace(data or {})
+
     def get_order_code(self, order_no: str):
         data = self._client._request_json("GET", f"/order/{order_no}/code")
         return _to_namespace(data or {})
